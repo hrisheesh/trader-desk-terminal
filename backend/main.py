@@ -695,7 +695,7 @@ import urllib.parse
 
 @app.get("/api/search")
 async def search(q: str):
-    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(q)}"
+    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(q)}&quotesCount=15&newsCount=0"
     headers = {"User-Agent": "Mozilla/5.0"}
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers)
@@ -714,6 +714,37 @@ async def search(q: str):
                 for item in quotes if item.get("symbol")
             ]
         }
+
+@app.get("/api/news/{symbol}")
+async def get_news(symbol: str):
+    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(symbol)}&quotesCount=0&newsCount=8"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            return {"news": []}
+        data = response.json()
+        items = data.get("news", [])
+        
+        results = []
+        for item in items:
+            title = item.get("title", "")
+            sentiment = "neutral"
+            lower = title.lower()
+            if any(w in lower for w in ["buy", "bull", "up", "soar", "gain", "growth", "high", "upgrade", "outperform"]):
+                sentiment = "positive"
+            elif any(w in lower for w in ["sell", "bear", "down", "plunge", "loss", "crash", "low", "downgrade", "lawsuit", "underperform"]):
+                sentiment = "negative"
+                
+            results.append({
+                "title": title,
+                "publisher": item.get("publisher"),
+                "link": item.get("link"),
+                "sentiment": sentiment,
+                "time": item.get("providerPublishTime")
+            })
+            
+        return {"news": results}
 
 frontend_dir = Path(__file__).resolve().parents[1] / "frontend"
 if frontend_dir.exists():

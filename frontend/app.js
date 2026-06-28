@@ -534,10 +534,12 @@ function renderBook(book) {
   const bestAsk = book.asks?.[0]?.price;
   const spread = bestBid && bestAsk ? bestAsk - bestBid : null;
   const renderSide = (container, rows, className) => {
+    const maxSize = Math.max(...rows.map(r => r.size || 0), 10);
     rows.slice(0, 10).forEach((row) => {
+      const sizePct = Math.min(100, Math.max(5, (row.size / maxSize) * 100));
       const div = document.createElement("div");
       div.className = `book-row ${className}`;
-      div.innerHTML = `<span>${formatPrice(row.price)}</span><span>${formatPrice(row.size)}</span><small>${row.orders || ""}</small>`;
+      div.innerHTML = `<div class="book-row-bg" style="width: ${sizePct}%"></div><span>${formatPrice(row.price)}</span><span>${formatPrice(row.size)}</span><small>${row.orders || ""}</small>`;
       container.appendChild(div);
     });
   };
@@ -610,12 +612,50 @@ async function loadFlow(symbol) {
   renderTape(tape);
 }
 
+async function loadNews() {
+  if (!activeSymbol) return;
+  try {
+    const data = await fetchFromApi(`/api/news/${encodeURIComponent(activeSymbol)}`);
+    const list = document.getElementById("news-list");
+    if (!list) return;
+    if (!data.news || data.news.length === 0) {
+      list.innerHTML = `<span class="caption">No recent news</span>`;
+      return;
+    }
+    list.innerHTML = data.news.map(item => {
+      const sentClass = `sentiment-${item.sentiment}`;
+      const sentText = item.sentiment === "positive" ? "BUY SIGNAL" : (item.sentiment === "negative" ? "SELL SIGNAL" : "NEUTRAL");
+      
+      let timeStr = "";
+      if (item.time) {
+        const d = new Date(item.time * 1000);
+        const hh = String(d.getHours()).padStart(2, "0");
+        const mm = String(d.getMinutes()).padStart(2, "0");
+        timeStr = `${hh}:${mm}`;
+      }
+      
+      return `
+        <div class="news-item">
+          <a href="${item.link}" target="_blank" rel="noopener noreferrer">${item.title}</a>
+          <div class="news-meta">
+            <span>${item.publisher} &bull; ${timeStr}</span>
+            <span class="${sentClass}">${sentText}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (err) {
+    console.error("News error", err);
+  }
+}
+
 async function refreshAll() {
   try {
     await loadDesk();
     await loadDetail(activeSymbol);
     await loadCandles();
     await loadFlow(activeSymbol);
+    await loadNews();
     setStatus(`API ${apiBase || "same-origin"} ${new Date().toLocaleTimeString([], { hour12: false })}`, "ok");
   } catch (error) {
     setStatus(`Backend unavailable: ${error.message}`, "error");
@@ -734,7 +774,7 @@ function renderSearchResults() {
   searchDropdown.innerHTML = searchResults.map((item, i) => `
     <div class="search-item" data-index="${i}" onclick="selectSearchResult(${i})">
       <span class="sym">${item.symbol}</span>
-      <span class="name">${item.name || item.type}</span>
+      <span class="name">${item.name || item.type} ${item.exchange ? `(${item.exchange})` : ""}</span>
     </div>
   `).join("");
   searchDropdown.classList.remove("hidden");
@@ -769,6 +809,32 @@ function updateSearchSelection() {
 document.addEventListener("click", (e) => {
   if (!els.command.contains(e.target) && !searchDropdown.contains(e.target)) {
     searchDropdown.classList.add("hidden");
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    e.preventDefault();
+    els.command.focus();
+  }
+});
+
+els.command.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const val = e.target.value.trim();
+    if (val.startsWith("/")) {
+      const parts = val.slice(1).split(" ");
+      const cmd = parts[0].toLowerCase();
+      if (cmd === "chart" && parts[1]) {
+         const sym = parts[1].toUpperCase();
+         selectSymbol(sym);
+         // Optionally add to watchlist if not there
+      }
+      e.target.value = "";
+      els.command.blur();
+    } else if (searchResults.length > 0) {
+      selectSearchResult(0);
+    }
   }
 });
 
