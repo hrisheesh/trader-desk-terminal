@@ -302,8 +302,39 @@ function visibleLimit() {
   return VISIBLE_BARS[activeInterval] || 80;
 }
 
+function fillCandleGaps(sorted) {
+  if (sorted.length === 0) return [];
+  const ms = intervalMs();
+  const filled = [sorted[0]];
+  let current = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+    let expectedTime = current.timestamp + ms;
+    const gapMs = next.timestamp - current.timestamp;
+    
+    if (gapMs > ms && gapMs < 5 * ms) {
+      while (expectedTime < next.timestamp) {
+        filled.push({
+          time: new Date(expectedTime).toISOString(),
+          timestamp: expectedTime,
+          open: current.close,
+          high: current.close,
+          low: current.close,
+          close: current.close,
+          volume: 0,
+        });
+        expectedTime += ms;
+      }
+    }
+    filled.push(next);
+    current = next;
+  }
+  return filled;
+}
+
 function normalizeCandles(candles) {
-  return (candles || [])
+  const sorted = (candles || [])
     .filter((candle) => ["open", "high", "low", "close"].every((key) => Number.isFinite(Number(candle[key]))))
     .map((candle) => ({
       time: candle.time,
@@ -314,8 +345,9 @@ function normalizeCandles(candles) {
       close: Number(candle.close),
       volume: Number(candle.volume || 0),
     }))
-    .sort((a, b) => a.timestamp - b.timestamp)
-    .slice(-160);
+    .sort((a, b) => a.timestamp - b.timestamp);
+  
+  return fillCandleGaps(sorted).slice(-160);
 }
 
 function mergeLiveCandles(restCandles) {
@@ -339,7 +371,8 @@ function mergeLiveCandles(restCandles) {
       merged.push({ ...liveCandle });
     }
   }
-  return merged.sort((a, b) => a.timestamp - b.timestamp).slice(-160);
+  const sorted = merged.sort((a, b) => a.timestamp - b.timestamp);
+  return fillCandleGaps(sorted).slice(-160);
 }
 
 function applyTickToCandle(tick) {
