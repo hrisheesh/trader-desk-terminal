@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trader Desk</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="desk-shell">
+      <header class="top-bar">
+        <div>
+          <p class="eyebrow">Trader Desk</p>
+          <h1>Live Command Floor</h1>
+        </div>
+        <label class="command-line" aria-label="Symbol command line">
+          <span>CMD</span>
+          <input id="command-input" type="text" autocomplete="off" placeholder="BTC, NVDA, SPY..." />
+        </label>
+        <div class="clock-stack">
+          <span id="market-state">SYNCING</span>
+          <strong id="desk-clock">--:--:--</strong>
+        </div>
+      </header>
+
+      <main class="floor">
+        <aside class="watch-rail" aria-label="Watchlist">
+          <div class="panel-head">
+            <div class="rail-tabs" id="rail-tabs">
+              <button data-tab="watchlist" class="active">Watchlist</button>
+              <button data-tab="history">History</button>
+            </div>
+            <button id="refresh-button" type="button">Sync</button>
+          </div>
+          <div id="watchlist" class="watchlist loading">Loading symbols...</div>
+        </aside>
+
+        <section class="focus-panel" aria-label="Selected symbol detail">
+          <div class="focus-head">
+            <div>
+              <p class="eyebrow">Focused Line</p>
+              <h2 id="focus-symbol">--</h2>
+            </div>
+            <div class="quote-hero">
+              <strong id="focus-price">--</strong>
+              <span id="focus-change">--</span>
+            </div>
+            <button id="pin-button" class="pin-btn">Pin</button>
+          </div>
+          <div class="metric-row">
+            <div><span>High</span><strong id="metric-high">--</strong></div>
+            <div><span>Low</span><strong id="metric-low">--</strong></div>
+            <div><span>Volume</span><strong id="metric-volume">--</strong></div>
+            <div><span>Venue</span><strong id="metric-venue">--</strong></div>
+          </div>
+          <div class="chart-toolbar" aria-label="Chart controls">
+            <div id="timeframe-controls" class="segmented">
+              <button type="button" data-interval="1m" class="active">1m</button>
+              <button type="button" data-interval="2m">2m</button>
+              <button type="button" data-interval="5m">5m</button>
+              <button type="button" data-interval="15m">15m</button>
+              <button type="button" data-interval="30m">30m</button>
+              <button type="button" data-interval="1h">1h</button>
+            </div>
+            <div id="chart-mode-controls" class="segmented">
+              <button type="button" data-mode="candles" class="active">Candles</button>
+              <button type="button" data-mode="line">Line</button>
+            </div>
+          </div>
+          <div id="chart-wrap" class="chart-wrap">
+            <svg id="price-chart" viewBox="0 0 900 430" role="img" aria-label="Intraday price chart"></svg>
+          </div>
+          <p id="chart-caption" class="caption">Waiting for intraday candles.</p>
+          <div class="lower-console">
+            <section>
+              <h3>Market Pulse</h3>
+              <div id="pulse-grid" class="pulse-grid"></div>
+            </section>
+            <section>
+              <h3>Signal Stack</h3>
+              <div id="signal-list" class="signal-list"></div>
+            </section>
+            <section>
+              <h3>Momentum</h3>
+              <div id="movers-list" class="movers-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <aside class="flow-panel" aria-label="Order flow and tape">
+          <div class="panel-head">
+            <span>Flow</span>
+            <span id="flow-source">--</span>
+          </div>
+          <section class="book-box">
+            <h3>Book</h3>
+            <div class="book-columns">
+              <div>
+                <p>Bid</p>
+                <div id="book-bids" class="book-side"></div>
+              </div>
+              <div>
+                <p>Ask</p>
+                <div id="book-asks" class="book-side"></div>
+              </div>
+            </div>
+          </section>
+          <section class="tape-box">
+            <h3>Tape</h3>
+            <div id="tape-list" class="tape-list"></div>
+          </section>
+          <section class="alerts-box">
+            <h3>Alerts</h3>
+            <div id="alerts-list" class="alerts-list"></div>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="status-tape">
+        <div id="ticker-tape" class="ticker-tape">Waiting for backend quotes...</div>
+        <div id="api-status" class="api-status">API: connecting</div>
+      </footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,60 @@
+{
+  "market_data": [
+    {
+      "name": "Yahoo Finance Chart API",
+      "purpose": "Real delayed current quote metadata and intraday OHLC candles for NVDA, AAPL, TSLA, MSFT, SOXL, SPY.",
+      "method": "GET",
+      "url_template": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={range}&interval={interval}&includePrePost={includePrePost}",
+      "called_by": ["GET /api/quotes", "GET /api/quotes/{symbol}", "GET /api/candles/{symbol}", "GET /api/tape/{symbol}", "GET /api/signals/{symbol}"],
+      "notes": "No API key. Responses are proxied by the backend; frontend never calls Yahoo directly. This feed is delayed/last-sale and is not presented as no-delay real-time equity data. Yahoo does not provide 30s candles through this public endpoint."
+    },
+    {
+      "name": "Coinbase Exchange Product Ticker",
+      "purpose": "Real-time BTC-USD and ETH-USD ticker price, bid, ask, last trade id, size, and trade time.",
+      "method": "GET",
+      "url_template": "https://api.exchange.coinbase.com/products/{product_id}/ticker",
+      "called_by": ["GET /api/quotes", "GET /api/quotes/{symbol}", "GET /api/desk"],
+      "notes": "Used for live crypto REST snapshots."
+    },
+    {
+      "name": "Coinbase Exchange WebSocket Ticker",
+      "purpose": "Tick-by-tick BTC-USD and ETH-USD stream proxied through the FastAPI backend.",
+      "method": "WEBSOCKET",
+      "url_template": "wss://ws-feed.exchange.coinbase.com",
+      "called_by": ["WS /api/stream/{symbol}"],
+      "notes": "Browser connects only to the backend websocket. 30s active crypto candles are built from this real tick stream after page load."
+    },
+    {
+      "name": "Coinbase Exchange Product Stats",
+      "purpose": "Real BTC-USD and ETH-USD 24-hour open, high, low, and volume.",
+      "method": "GET",
+      "url_template": "https://api.exchange.coinbase.com/products/{product_id}/stats",
+      "called_by": ["GET /api/quotes", "GET /api/quotes/{symbol}", "GET /api/desk"],
+      "notes": "Used to calculate live crypto 24-hour change."
+    },
+    {
+      "name": "Coinbase Exchange Product Candles",
+      "purpose": "Real BTC-USD and ETH-USD OHLC candles for 1m, 5m, 15m, and 1h; 2m is aggregated server-side from real 1m candles.",
+      "method": "GET",
+      "url_template": "https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}",
+      "called_by": ["GET /api/quotes", "GET /api/quotes/{symbol}", "GET /api/candles/{symbol}", "GET /api/signals/{symbol}"],
+      "notes": "Coinbase REST does not publish 30s candle history. For 30s, the backend returns native 1m history plus metadata, and the frontend only advances the active 30s candle from backend-proxied Coinbase WebSocket ticks."
+    },
+    {
+      "name": "Coinbase Exchange Product Book",
+      "purpose": "Real crypto order book depth for BTC-USD and ETH-USD.",
+      "method": "GET",
+      "url_template": "https://api.exchange.coinbase.com/products/{product_id}/book?level=2",
+      "called_by": ["GET /api/orderbook/{symbol}"],
+      "notes": "Used only for crypto symbols supported by Coinbase."
+    },
+    {
+      "name": "Coinbase Exchange Product Trades",
+      "purpose": "Real recent trade tape for BTC-USD and ETH-USD.",
+      "method": "GET",
+      "url_template": "https://api.exchange.coinbase.com/products/{product_id}/trades",
+      "called_by": ["GET /api/tape/{symbol}"],
+      "notes": "Used only for crypto symbols supported by Coinbase."
+    }
+  ]
+}
