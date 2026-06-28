@@ -136,6 +136,7 @@ def _parse_yahoo_chart(symbol: str, payload: dict[str, Any]) -> dict[str, Any]:
             continue
         candles.append(
             {
+                "timestamp": timestamp,
                 "time": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
                 "open": _round(float(open_price), 4),
                 "high": _round(float(high), 4),
@@ -177,7 +178,7 @@ def _parse_yahoo_chart(symbol: str, payload: dict[str, Any]) -> dict[str, Any]:
         "marketState": meta.get("marketState") or "REGULAR_MARKET_LAST_SALE",
         "regularMarketTime": regular_market_time,
         "lastTradeTime": regular_market_time,
-        "candles": candles[-120:],
+        "candles": candles,
         "source": "Yahoo Finance Chart API",
         "feed": "real delayed equity last-sale",
         "isRealtime": False,
@@ -191,6 +192,7 @@ def _parse_coinbase_candles(rows: list[list[float]]) -> list[dict[str, Any]]:
     for timestamp, low, high, open_price, close, volume in rows:
         candles.append(
             {
+                "timestamp": timestamp,
                 "time": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
                 "open": _round(float(open_price), 4),
                 "high": _round(float(high), 4),
@@ -199,7 +201,7 @@ def _parse_coinbase_candles(rows: list[list[float]]) -> list[dict[str, Any]]:
                 "volume": _round(float(volume), 6),
             }
         )
-    return sorted(candles, key=lambda candle: candle["time"])[-120:]
+    return sorted(candles, key=lambda candle: candle["time"])
 
 
 def _interval_seconds(interval: str) -> int:
@@ -211,47 +213,55 @@ def _interval_seconds(interval: str) -> int:
     return SUPPORTED_INTERVALS[interval]
 
 
-def _aggregate_candles(candles: list[dict[str, Any]], interval_seconds: int) -> list[dict[str, Any]]:
-    buckets: dict[int, dict[str, Any]] = {}
-    for candle in candles:
-        timestamp = datetime.fromisoformat(candle["time"]).timestamp()
-        bucket_start = int(timestamp // interval_seconds) * interval_seconds
-        bucket = buckets.get(bucket_start)
-        if bucket is None:
-            buckets[bucket_start] = {
-                "time": datetime.fromtimestamp(bucket_start, timezone.utc).isoformat(),
-                "open": candle["open"],
-                "high": candle["high"],
-                "low": candle["low"],
-                "close": candle["close"],
-                "volume": candle.get("volume") or 0,
+def _aggregate_candles(candles: list[dict[str, Any]], interval_seconds: int, tz_offset_minutes: int = 0) -> list[dict[str, Any]]:
+    if not candles:
+        return []
+    
+    tz_offset_sec = tz_offset_minutes * 60
+    aggregated = {}
+    for c in candles:
+        t_time = int(c["timestamp"])
+        shifted = t_time - tz_offset_sec
+        b_time = (shifted // interval_seconds) * interval_seconds + tz_offset_sec
+        
+        if b_time not in aggregated:
+            aggregated[b_time] = {
+                "timestamp": b_time,
+                "time": datetime.fromtimestamp(b_time, timezone.utc).isoformat(),
+                "open": c["open"],
+                "high": c["high"],
+                "low": c["low"],
+                "close": c["close"],
+                "volume": c["volume"]
             }
-            continue
-        bucket["high"] = _round(max(float(bucket["high"]), float(candle["high"])), 4)
-        bucket["low"] = _round(min(float(bucket["low"]), float(candle["low"])), 4)
-        bucket["close"] = candle["close"]
-        bucket["volume"] = _round(float(bucket.get("volume") or 0) + float(candle.get("volume") or 0), 6)
-    return [buckets[key] for key in sorted(buckets)][-120:]
+        else:
+            b = aggregated[b_time]
+            b["high"] = max(b["high"], c["high"])
+            b["low"] = min(b["low"], c["low"])
+            b["close"] = c["close"]
+            b["volume"] += c["volume"]
+            
+    return sorted(aggregated.values(), key=lambda x: x["timestamp"])
 
 
-async def _candles_for_symbol(symbol: str, interval: str) -> dict[str, Any]:
+async def _candles_for_symbol(symbol: str, interval: str, tz_offset_minutes: int = 0) -> dict[str, Any]:
     interval_seconds = _interval_seconds(interval)
     started = time.perf_counter()
 
     if symbol in CRYPTO_SYMBOLS:
         granularity = interval_seconds if interval_seconds in COINBASE_GRANULARITIES else 60
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            try:
-                payload = await _fetch_json(
-                    client,
-                    COINBASE_CANDLES_URL.format(symbol=symbol),
-                    {"granularity": granularity},
-                )
-            except httpx.HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"Coinbase candles failed: {exc}") from exc
+        if interval_seconds == 3600:
+            granularity = 300 # Fetch 5m to allow timezone shifting
+        try:
+            payload = await _fetch_yahoo_json(
+                COINBASE_CANDLES_URL.format(symbol=symbol),
+                {"granularity": str(granularity)},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Coinbase candles failed: {exc}") from exc
         candles = _parse_coinbase_candles(payload)
         if granularity != interval_seconds:
-            candles = _aggregate_candles(candles, interval_seconds)
+            candles = _aggregate_candles(candles, interval_seconds, tz_offset_minutes)
         feed_note = "real-time crypto OHLC; active candle updates from Coinbase WebSocket"
         return {
             "symbol": symbol,
@@ -266,21 +276,30 @@ async def _candles_for_symbol(symbol: str, interval: str) -> dict[str, Any]:
             "fetchedAt": _now_iso(),
         }
 
-    if interval not in YAHOO_INTERVALS:
+    fetch_interval = interval
+    range_param = "1d"
+    if interval == "1h":
+        fetch_interval = "5m"
+        range_param = "5d"
+        
+    if fetch_interval not in YAHOO_INTERVALS:
         raise HTTPException(status_code=400, detail="Yahoo equity feed does not support this interval")
     try:
         payload = await _fetch_yahoo_json(
             YAHOO_CHART_URL.format(symbol=symbol),
-            {"range": "1d", "interval": interval, "includePrePost": "false"},
+            {"range": range_param, "interval": fetch_interval, "includePrePost": "false"},
         )
         parsed = _parse_yahoo_chart(symbol, payload)
+        candles = parsed.get("candles", [])
+        if fetch_interval != interval:
+            candles = _aggregate_candles(candles, interval_seconds, tz_offset_minutes)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=502, detail=f"Yahoo candles failed: {exc}") from exc
     return {
         "symbol": symbol,
         "interval": interval,
         "intervalSeconds": interval_seconds,
-        "candles": parsed.get("candles", []),
+        "candles": candles,
         "source": "Yahoo Finance Chart API",
         "feed": "real delayed equity OHLC bars",
         "isRealtime": False,
@@ -292,9 +311,9 @@ async def _candles_for_symbol(symbol: str, interval: str) -> dict[str, Any]:
 async def _coinbase_quote(symbol: str, client: httpx.AsyncClient) -> dict[str, Any]:
     started = time.perf_counter()
     ticker, stats, candles_payload = await asyncio.gather(
-        _fetch_json(client, COINBASE_TICKER_URL.format(symbol=symbol)),
-        _fetch_json(client, COINBASE_STATS_URL.format(symbol=symbol)),
-        _fetch_json(client, COINBASE_CANDLES_URL.format(symbol=symbol), {"granularity": 60}),
+        _fetch_yahoo_json(COINBASE_TICKER_URL.format(symbol=symbol), {}),
+        _fetch_yahoo_json(COINBASE_STATS_URL.format(symbol=symbol), {}),
+        _fetch_yahoo_json(COINBASE_CANDLES_URL.format(symbol=symbol), {"granularity": "60"}),
     )
     latency_ms = round((time.perf_counter() - started) * 1000)
     price = float(ticker["price"])
@@ -432,15 +451,23 @@ def _signals_from_detail(detail: dict[str, Any]) -> dict[str, Any]:
         elif rsi_14 <= 35:
             trend_score -= 1
 
-    direction = "up" if trend_score > 0 else "down" if trend_score < 0 else "flat"
+    action = "Buy" if trend_score > 0 else "Sell" if trend_score < 0 else "Hold"
     confidence = min(92, 50 + abs(trend_score) * 14 + (8 if detail.get("isRealtime") else 0))
     latest_time = detail.get("lastTradeTime") or detail.get("regularMarketTime")
+
+    target_price = None
+    if price is not None and volatility is not None:
+        if action == "Buy":
+            target_price = price * (1 + (volatility / 100))
+        elif action == "Sell":
+            target_price = price * (1 - (volatility / 100))
 
     return {
         "symbol": detail["symbol"],
         "method": "EMA(9/21), RSI(14), VWAP, short-horizon realized volatility",
         "horizon": "next few ticks for crypto; next delayed bar for equities",
-        "direction": direction,
+        "action": action,
+        "targetPrice": _round(target_price, 4),
         "confidence": confidence,
         "ema9": _round(ema_9, 4),
         "ema21": _round(ema_21, 4),
@@ -522,21 +549,23 @@ async def desk(symbols: str | None = None) -> dict[str, Any]:
             "liveFeeds": sum(1 for quote in valid if quote.get("isRealtime")),
         },
         "signals": signals,
-        "alerts": [
-            {
-                "level": "live" if quote.get("isRealtime") else "delayed",
-                "symbol": quote["symbol"],
-                "message": (
-                    f"{quote['symbol']} {quote.get('changePercent', 0):+.2f}% | "
-                    f"{quote.get('feed')} | last {quote.get('lastTradeTime') or 'n/a'}"
-                ),
-            }
-            for quote in sorted(
-                valid,
-                key=lambda item: abs(item.get("changePercent") or 0),
-                reverse=True,
-            )[:6]
-        ],
+        "alerts": sorted(
+            [
+                {
+                    "level": "live" if detail.get("isRealtime") else "delayed",
+                    "symbol": detail["symbol"],
+                    "message": (
+                        f"{detail['symbol']} [{_signals_from_detail(detail).get('action', 'Hold').upper() if detail.get('candles') else 'HOLD'}] "
+                        f"{detail.get('changePercent', 0):+.2f}% | "
+                        f"{detail.get('feed')} | last {detail.get('lastTradeTime') or 'n/a'}"
+                    ),
+                }
+                for detail in valid
+                if detail
+            ],
+            key=lambda item: abs(float(item["message"].split("%")[0].split(" ")[-1] if "%" in item["message"] else 0)),
+            reverse=True,
+        )[:6],
         "marketClock": _market_clock(),
         "fetchedAt": _now_iso(),
     }
@@ -552,9 +581,9 @@ async def quote_detail(symbol: str) -> dict[str, Any]:
 
 
 @app.get("/api/candles/{symbol}")
-async def candles(symbol: str, interval: str = "1m") -> dict[str, Any]:
+async def candles(symbol: str, interval: str = "1m", tz: int = 0) -> dict[str, Any]:
     normalized = _validate_symbol(symbol)
-    return await _candles_for_symbol(normalized, interval)
+    return await _candles_for_symbol(normalized, interval, tz)
 
 
 @app.get("/api/signals/{symbol}")
@@ -695,56 +724,73 @@ import urllib.parse
 
 @app.get("/api/search")
 async def search(q: str):
-    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(q)}&quotesCount=15&newsCount=0"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Search failed")
-        data = response.json()
+    url = "https://query2.finance.yahoo.com/v1/finance/search"
+    try:
+        data = await _fetch_yahoo_json(url, {"q": q, "quotesCount": "15", "newsCount": "0"})
         quotes = data.get("quotes", [])
         return {
             "results": [
                 {
                     "symbol": item.get("symbol"),
                     "name": item.get("shortname") or item.get("longname"),
-                    "exchange": item.get("exchange"),
+                    "exchange": item.get("exchDisp") or item.get("exchange"),
                     "type": item.get("quoteType")
                 }
                 for item in quotes if item.get("symbol")
             ]
         }
+    except Exception:
+        return {"results": []}
 
 @app.get("/api/news/{symbol}")
 async def get_news(symbol: str):
-    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(symbol)}&quotesCount=0&newsCount=8"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            return {"news": []}
-        data = response.json()
-        items = data.get("news", [])
+    url = "https://query2.finance.yahoo.com/v1/finance/search"
+    try:
+        data = await _fetch_yahoo_json(url, {"q": symbol, "quotesCount": "0", "newsCount": "8"})
+        news = data.get("news", [])
         
-        results = []
-        for item in items:
+        parsed_news = []
+        for item in news:
             title = item.get("title", "")
+            if not title:
+                continue
+            
+            summary = ""
+            if "description" in item:
+                summary = item["description"]
+            
+            related = item.get("relatedTickers", [])
+            primary_ticker = related[0] if related else symbol
+
+            # Simple keyword-based sentiment for demonstration
+            title_lower = title.lower()
             sentiment = "neutral"
-            lower = title.lower()
-            if any(w in lower for w in ["buy", "bull", "up", "soar", "gain", "growth", "high", "upgrade", "outperform"]):
+            if any(word in title_lower for word in ["up", "jump", "gain", "rise", "soar", "beat", "buy", "bull"]):
                 sentiment = "positive"
-            elif any(w in lower for w in ["sell", "bear", "down", "plunge", "loss", "crash", "low", "downgrade", "lawsuit", "underperform"]):
+            elif any(word in title_lower for word in ["down", "drop", "fall", "plunge", "miss", "sell", "bear"]):
                 sentiment = "negative"
                 
-            results.append({
+            parsed_news.append({
                 "title": title,
-                "publisher": item.get("publisher"),
-                "link": item.get("link"),
+                "publisher": item.get("publisher", "Yahoo Finance"),
+                "link": item.get("link", "#"),
+                "time": item.get("providerPublishTime"),
+                "summary": summary,
                 "sentiment": sentiment,
-                "time": item.get("providerPublishTime")
+                "ticker": primary_ticker
             })
             
-        return {"news": results}
+        # Fetch quotes for all tickers concurrently
+        unique_tickers = list({item["ticker"] for item in parsed_news})
+        quotes = await asyncio.gather(*(_quote_for_symbol(t) for t in unique_tickers), return_exceptions=True)
+        quote_map = {t: (q.get("changePercent") if isinstance(q, dict) else None) for t, q in zip(unique_tickers, quotes)}
+
+        for item in parsed_news:
+            item["tickerChange"] = quote_map.get(item["ticker"])
+
+        return {"news": parsed_news}
+    except Exception:
+        return {"news": []}
 
 frontend_dir = Path(__file__).resolve().parents[1] / "frontend"
 if frontend_dir.exists():

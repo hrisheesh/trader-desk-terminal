@@ -44,6 +44,9 @@ let refreshTimer = null;
 let flowTimer = null;
 let candleTimer = null;
 let tickSocket = null;
+let panOffset = 0;
+let isPanning = false;
+let lastPanX = 0;
 
 const els = {
   command: document.querySelector("#command-input"),
@@ -59,6 +62,8 @@ const els = {
   metricLow: document.querySelector("#metric-low"),
   metricVolume: document.querySelector("#metric-volume"),
   metricVenue: document.querySelector("#metric-venue"),
+  headerSignal: document.querySelector("#header-signal"),
+  headerTarget: document.querySelector("#header-target"),
   chart: document.querySelector("#price-chart"),
   chartCaption: document.querySelector("#chart-caption"),
   flowSource: document.querySelector("#flow-source"),
@@ -210,8 +215,8 @@ function renderTicker() {
 function renderPulse() {
   if (!pulse) return;
   els.pulse.innerHTML = `
-    <div><span>Up</span><strong>${pulse.upCount}</strong></div>
-    <div><span>Down</span><strong>${pulse.downCount}</strong></div>
+    <div><span>Up</span><strong>${pulse.advancers}</strong></div>
+    <div><span>Down</span><strong>${pulse.decliners}</strong></div>
     <div><span>Feeds</span><strong>${pulse.liveFeeds} LIVE</strong></div>
     <div><span>Notional</span><strong>${formatVolume(pulse.notionalVolume)}</strong></div>
   `;
@@ -221,8 +226,8 @@ function renderPulse() {
     .map((quote) => {
       const width = Math.min(100, Math.abs(quote.changePercent || 0) * 14);
       return `
-        <div class="mover-row">
-          <span>${quote.symbol}</span>
+        <div class="mover-row" style="cursor: pointer;" onclick="selectSymbol('${quote.symbol}')">
+          <span class="clickable-ticker">${quote.symbol}</span>
           <div class="mover-bar"><i class="${toneClass(quote.change)}" style="width:${width}%"></i></div>
           <strong class="${toneClass(quote.change)}">${quote.changePercent > 0 ? "+" : ""}${(quote.changePercent || 0).toFixed(2)}%</strong>
         </div>
@@ -231,27 +236,40 @@ function renderPulse() {
     .join("");
 
   els.alerts.innerHTML = alerts
-    .map((alert) => `<div class="alert-row ${alert.level}"><strong>${alert.symbol}</strong><span>${alert.message}</span></div>`)
+    .map((alert) => {
+      const cleanMessage = alert.message.replace(alert.symbol, '').trim();
+      return `<div class="alert-row ${alert.level}"><strong class="clickable-ticker" onclick="selectSymbol('${alert.symbol}')">${alert.symbol}</strong><span>${cleanMessage}</span></div>`;
+    })
     .join("");
 }
 
 function renderSignals() {
   const activeSignals = detail?.signals || signals.find((item) => item.symbol === activeSymbol);
+  if (!els.signals) return; // Wait until signals container exists in DOM
   if (!activeSignals) {
     els.signals.innerHTML = `<div class="signal-row neutral"><span>Waiting signal data</span></div>`;
     return;
   }
   const dirClass =
-    activeSignals.direction === "up" ? "positive" : activeSignals.direction === "down" ? "negative" : "neutral";
+    activeSignals.action === "Buy" ? "positive" : activeSignals.action === "Sell" ? "negative" : "neutral";
   els.signals.innerHTML = `
     <div class="signal-tile ${dirClass}">
-      <span>Bias</span><strong>${activeSignals.direction.toUpperCase()} ${activeSignals.confidence}%</strong>
+      <span>Action</span><strong>${activeSignals.action.toUpperCase()} ${activeSignals.confidence}%</strong>
     </div>
+    <div class="signal-row"><span>Target</span><strong>${activeSignals.targetPrice ? formatPrice(activeSignals.targetPrice) : 'N/A'}</strong></div>
     <div class="signal-row"><span>EMA 9 / 21</span><strong>${formatPrice(activeSignals.ema9)} / ${formatPrice(activeSignals.ema21)}</strong></div>
     <div class="signal-row"><span>RSI 14</span><strong>${formatPrice(activeSignals.rsi14)}</strong></div>
     <div class="signal-row"><span>VWAP</span><strong>${formatPrice(activeSignals.vwap)}</strong></div>
-    <div class="signal-row"><span>Realized vol</span><strong>${formatPrice(activeSignals.realizedVol)}%</strong></div>
+    <div class="signal-row"><span>Realized vol</span><strong>${formatPrice(activeSignals.realizedVolatilityPct)}%</strong></div>
   `;
+  
+  if (els.headerSignal) {
+    els.headerSignal.textContent = activeSignals.action.toUpperCase();
+    els.headerSignal.className = dirClass === "positive" ? "bg-green text-black" : dirClass === "negative" ? "bg-red text-black" : "bg-panel text-white";
+    els.headerSignal.style.backgroundColor = dirClass === "positive" ? "var(--green)" : dirClass === "negative" ? "var(--red)" : "var(--panel)";
+    els.headerSignal.style.color = dirClass !== "neutral" ? "var(--bg)" : "inherit";
+    els.headerTarget.textContent = activeSignals.targetPrice ? `Target: ${formatPrice(activeSignals.targetPrice)}` : '';
+  }
 }
 
 function renderFocus() {
@@ -337,7 +355,7 @@ function normalizeCandles(candles) {
   const sorted = (candles || [])
     .filter((candle) => ["open", "high", "low", "close"].every((key) => Number.isFinite(Number(candle[key]))))
     .map((candle) => ({
-      time: candle.time,
+      ...candle,
       timestamp: toTimestamp(candle.time),
       open: Number(candle.open),
       high: Number(candle.high),
@@ -372,7 +390,8 @@ function mergeLiveCandles(restCandles) {
     }
   }
   const sorted = merged.sort((a, b) => a.timestamp - b.timestamp);
-  return fillCandleGaps(sorted).slice(-160);
+  const targetLength = Math.max(120, restCandles.length || 120);
+  return fillCandleGaps(sorted).slice(-targetLength);
 }
 
 function applyTickToCandle(tick) {
@@ -432,7 +451,12 @@ function chartScale(candles, width, height, plot) {
 function renderChart() {
   const svg = els.chart;
   svg.innerHTML = "";
-  const candles = chartCandles.slice(-visibleLimit());
+  const vLimit = visibleLimit();
+  const maxPan = Math.max(0, chartCandles.length - vLimit);
+  panOffset = Math.max(0, Math.min(panOffset, maxPan));
+  const endIndex = chartCandles.length - Math.floor(panOffset);
+  const startIndex = Math.max(0, endIndex - vLimit);
+  const candles = chartCandles.slice(startIndex, endIndex);
   if (!candles.length) {
     svg.innerHTML = `<text x="32" y="72" fill="#9aa697" font-size="20">No real candle data from upstream</text>`;
     return;
@@ -456,12 +480,29 @@ function renderChart() {
 
   let xAxis = "";
   const tickCount = 6;
+  const drawnIndices = new Set();
   for (let i = 0; i < tickCount; i++) {
     const index = Math.floor((candles.length - 1) * (i / (tickCount - 1)));
+    if (drawnIndices.has(index)) continue;
+    drawnIndices.add(index);
     const c = candles[index];
     if (c) {
       const xPos = scale.x(index);
-      const timeStr = shortTime(c.timestamp);
+      
+      // Round to nearest logical boundary for cleaner labels
+      let timeStr = "";
+      const intervalMsVal = intervalMs();
+      const dt = new Date(c.timestamp ? c.timestamp * 1000 : toTimestamp(c.time));
+      
+      const showDate = intervalMsVal >= 900000; // >= 15 minutes
+      if (activeInterval.endsWith("d")) {
+        timeStr = dt.toLocaleDateString([], { month: "short", day: "numeric" });
+      } else if (showDate) {
+        timeStr = dt.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      } else {
+        timeStr = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      }
+      
       let anchor = "middle";
       let xOff = xPos;
       if (i === 0) { anchor = "start"; xOff = plot.left; }
@@ -495,7 +536,7 @@ function renderChart() {
         const tone = up ? "#2eff88" : "#ff4c56";
         const top = Math.min(openY, closeY);
         const bodyHeight = Math.max(1, Math.abs(closeY - openY));
-        const fill = up ? tone : "transparent";
+        const fill = up ? "#2eff88" : "#ff4c56";
         return `
           <line class="candle wick" x1="${x}" x2="${x}" y1="${highY}" y2="${lowY}" stroke="${tone}" stroke-width="1"></line>
           <rect class="candle body" x="${x - bodyWidth / 2}" y="${top}" width="${bodyWidth}" height="${bodyHeight}" fill="${fill}" stroke="${tone}" stroke-width="1"></rect>
@@ -584,8 +625,9 @@ async function loadDesk() {
 }
 
 async function loadCandles() {
+  const tzOffset = new Date().getTimezoneOffset();
   const payload = await fetchFromApi(
-    `/api/candles/${encodeURIComponent(activeSymbol)}?interval=${encodeURIComponent(activeInterval)}`
+    `/api/candles/${encodeURIComponent(activeSymbol)}?interval=${encodeURIComponent(activeInterval)}&tz=${tzOffset}`
   );
   lastCandlePayload = payload;
   const restCandles = normalizeCandles(payload.candles);
@@ -593,6 +635,7 @@ async function loadCandles() {
   chartCandles = mergeLiveCandles(restCandles);
   updateChartCaption(` | ${payload.isRealtime ? "LIVE CAPABLE" : "DELAYED"}`);
   renderChart();
+  renderFocus();
 }
 
 async function loadDetail(symbol) {
@@ -634,11 +677,18 @@ async function loadNews() {
         timeStr = `${hh}:${mm}`;
       }
       
+      let tickerBadge = "";
+      if (item.ticker) {
+        const changeStr = item.tickerChange ? `${item.tickerChange > 0 ? "+" : ""}${item.tickerChange.toFixed(2)}%` : "";
+        const changeClass = item.tickerChange > 0 ? "positive" : (item.tickerChange < 0 ? "negative" : "neutral");
+        tickerBadge = `<span class="news-ticker-badge" style="cursor:pointer;" onclick="selectSymbol('${item.ticker}')">${item.ticker} <span class="${changeClass}">${changeStr}</span></span>`;
+      }
+      
       return `
         <div class="news-item">
           <a href="${item.link}" target="_blank" rel="noopener noreferrer">${item.title}</a>
           <div class="news-meta">
-            <span>${item.publisher} &bull; ${timeStr}</span>
+            <span>${tickerBadge} &bull; ${item.publisher} &bull; ${timeStr}</span>
             <span class="${sentClass}">${sentText}</span>
           </div>
         </div>
@@ -651,11 +701,11 @@ async function loadNews() {
 
 async function refreshAll() {
   try {
-    await loadDesk();
-    await loadDetail(activeSymbol);
-    await loadCandles();
-    await loadFlow(activeSymbol);
-    await loadNews();
+    try { await loadDesk(); } catch (e) { console.error("loadDesk failed", e); }
+    try { await loadDetail(activeSymbol); } catch (e) { console.error("loadDetail failed", e); }
+    try { await loadCandles(); } catch (e) { console.error("loadCandles failed", e); }
+    try { await loadFlow(activeSymbol); } catch (e) { console.error("loadFlow failed", e); }
+    try { await loadNews(); } catch (e) { console.error("loadNews failed", e); }
     setStatus(`API ${apiBase || "same-origin"} ${new Date().toLocaleTimeString([], { hour12: false })}`, "ok");
   } catch (error) {
     setStatus(`Backend unavailable: ${error.message}`, "error");
@@ -693,10 +743,10 @@ function connectStream(symbol) {
 }
 
 async function selectSymbol(symbol) {
-  if (!symbol || symbol === activeSymbol) return;
+  if (!symbol) return;
   activeSymbol = symbol;
+  panOffset = 0;
   chartCandles = [];
-  baseRestCandles = [];
   liveCandleUpdates.clear();
   lastCandlePayload = null;
   connectStream(symbol);
@@ -713,6 +763,7 @@ function bindControls() {
   els.timeframeControls.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", async () => {
       activeInterval = button.dataset.interval;
+      panOffset = 0;
       setActiveButtons(els.timeframeControls, "interval", activeInterval);
       chartCandles = [];
       baseRestCandles = [];
@@ -811,6 +862,26 @@ document.addEventListener("click", (e) => {
     searchDropdown.classList.add("hidden");
   }
 });
+
+window.addEventListener("resize", renderChart);
+window.addEventListener("resize", renderFocus);
+
+els.chart.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  isPanning = true;
+  lastPanX = e.clientX;
+});
+window.addEventListener("mousemove", (e) => {
+  if (!isPanning) return;
+  const dx = e.clientX - lastPanX;
+  if (Math.abs(dx) > 0) {
+    const pixelsPerBar = (window.innerWidth - 120) / visibleLimit();
+    panOffset += dx / pixelsPerBar;
+    lastPanX = e.clientX;
+    renderChart();
+  }
+});
+window.addEventListener("mouseup", () => isPanning = false);
 
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {

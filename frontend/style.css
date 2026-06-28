@@ -141,8 +141,8 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   top: calc(100% + 4px);
   left: 0;
   width: 100%;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
+  background: #111a18;
+  border: 1px solid #26332b;
   border-radius: 4px;
   z-index: 1000;
   max-height: 250px;
@@ -227,6 +227,39 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
+}
+.panel-head {
+  padding: 8px;
+  justify-content: space-between;
+}
+.rail-tabs {
+  display: flex;
+  gap: 8px;
+}
+.rail-tabs button {
+  background: transparent;
+  border: 1px solid #26332b;
+  color: #888;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.8em;
+  cursor: pointer;
+}
+.rail-tabs button.active {
+  background: #1f2a24;
+  color: #fff;
+  border-color: #3b5043;
+}
+.rail-action-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 1.2em;
+}
+.rail-action-btn:hover {
+  color: #fff;
 }
 
 .panel-head {
@@ -384,16 +417,33 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
 
 .lower-console {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 10px;
   border-top: 1px solid var(--line);
   padding-top: 8px;
 }
 
-.pulse-grid, .signal-list, .movers-list, .alerts-list, .book-side, .tape-list {
+.pulse-grid, .signal-list, .movers-list, .alerts-list, .book-side, .tape-list, .news-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.news-ticker-badge {
+  background: #2a2a2a;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-weight: bold;
+  color: #fff;
+  transition: background 0.1s;
+}
+.news-ticker-badge:hover {
+  background: #444;
+}
+
+.news-list {
+  overflow-y: auto;
+  max-height: 140px;
 }
 
 .pulse-grid {
@@ -501,3 +551,17 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
 }
 .book-row.positive .book-row-bg { background: var(--green); }
 .book-row.negative .book-row-bg { background: var(--red); }
+
+.clickable-ticker {
+  cursor: pointer;
+  padding: 2px 6px;
+  background-color: var(--panel);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+.clickable-ticker:hover {
+  background-color: var(--cyan);
+  color: var(--bg);
+  border-color: var(--cyan);
+}

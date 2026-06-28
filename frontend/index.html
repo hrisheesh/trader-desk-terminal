@@ -36,6 +36,7 @@
             <button id="refresh-button" type="button">Sync</button>
           </div>
           <div id="watchlist" class="watchlist loading">Loading symbols...</div>
+          <div id="history-list" class="watchlist hidden"></div>
         </aside>
 
         <section class="focus-panel" aria-label="Selected symbol detail">
@@ -47,6 +48,10 @@
             <div class="quote-hero">
               <strong id="focus-price">--</strong>
               <span id="focus-change">--</span>
+            </div>
+            <div class="signal-hero">
+              <strong id="header-signal" style="padding: 2px 6px; border-radius: 4px;">--</strong>
+              <span id="header-target" style="font-size: 12px; color: var(--muted);"></span>
             </div>
             <button id="pin-button" class="pin-btn">Pin</button>
           </div>
@@ -62,7 +67,6 @@
               <button type="button" data-interval="2m">2m</button>
               <button type="button" data-interval="5m">5m</button>
               <button type="button" data-interval="15m">15m</button>
-              <button type="button" data-interval="30m">30m</button>
               <button type="button" data-interval="1h">1h</button>
             </div>
             <div id="chart-mode-controls" class="segmented">
@@ -86,6 +90,10 @@
             <section>
               <h3>Momentum</h3>
               <div id="movers-list" class="movers-list"></div>
+            </section>
+            <section>
+              <h3>Signals</h3>
+              <div id="signal-list" class="signal-list"></div>
             </section>
           </div>
         </section>
