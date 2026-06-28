@@ -89,6 +89,55 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   font-weight: bold;
 }
 
+.command-line input:focus {
+  outline: none;
+  border-bottom-color: var(--text-bright);
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  z-index: 1000;
+  max-height: 250px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+.search-dropdown.hidden {
+  display: none;
+}
+.search-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.search-item:last-child {
+  border-bottom: none;
+}
+.search-item:hover, .search-item.active {
+  background: rgba(255, 255, 255, 0.1);
+}
+.search-item .sym {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-bright);
+}
+.search-item .name {
+  font-size: 0.8em;
+  color: var(--text-dim);
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .command-line input {
   background: transparent;
   border: 0;

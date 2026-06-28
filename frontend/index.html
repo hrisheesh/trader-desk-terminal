@@ -15,7 +15,10 @@
         </div>
         <label class="command-line" aria-label="Symbol command line">
           <span>CMD</span>
-          <input id="command-input" type="text" autocomplete="off" placeholder="BTC, NVDA, SPY..." />
+          <div class="cmd-input-wrapper" style="position: relative; flex: 1;">
+            <input id="command-input" type="text" autocomplete="off" placeholder="BTC, NVDA, RELIANCE.NS..." style="width: 100%;" />
+            <div id="search-dropdown" class="search-dropdown hidden"></div>
+          </div>
         </label>
         <div class="clock-stack">
           <span id="market-state">SYNCING</span>

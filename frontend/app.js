@@ -720,18 +720,146 @@ function startTimers() {
 }
 
 els.refresh.addEventListener("click", refreshAll);
+let searchTimeout = null;
+const searchDropdown = document.getElementById("search-dropdown");
+let searchResults = [];
+let searchSelectedIndex = -1;
+
+function renderSearchResults() {
+  if (searchResults.length === 0) {
+    searchDropdown.classList.add("hidden");
+    return;
+  }
+  searchSelectedIndex = -1;
+  searchDropdown.innerHTML = searchResults.map((item, i) => `
+    <div class="search-item" data-index="${i}" onclick="selectSearchResult(${i})">
+      <span class="sym">${item.symbol}</span>
+      <span class="name">${item.name || item.type}</span>
+    </div>
+  `).join("");
+  searchDropdown.classList.remove("hidden");
+}
+
+window.selectSearchResult = async function(index) {
+  const item = searchResults[index];
+  if (item) {
+    const sym = item.symbol.toUpperCase();
+    try {
+      await fetchFromApi(`/api/quotes/${encodeURIComponent(sym)}`);
+      addToHistory(sym);
+      selectSymbol(sym);
+    } catch (err) {
+      setStatus(`Symbol not found: ${sym}`, "error");
+    }
+    els.command.value = "";
+    searchDropdown.classList.add("hidden");
+  }
+};
+
+function updateSearchSelection() {
+  const items = searchDropdown.querySelectorAll(".search-item");
+  items.forEach((item, i) => {
+    item.classList.toggle("active", i === searchSelectedIndex);
+    if (i === searchSelectedIndex) {
+      item.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+document.addEventListener("click", (e) => {
+  if (!els.command.contains(e.target) && !searchDropdown.contains(e.target)) {
+    searchDropdown.classList.add("hidden");
+  }
+});
+
+els.command.addEventListener("input", (e) => {
+  const query = e.target.value.trim();
+  if (!query || query.startsWith("/")) {
+    searchDropdown.classList.add("hidden");
+    return;
+  }
+  
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(async () => {
+    try {
+      const data = await fetchFromApi(`/api/search?q=${encodeURIComponent(query)}`);
+      searchResults = data.results || [];
+      renderSearchResults();
+    } catch (err) {
+      console.error("Search error:", err);
+    }
+  }, 300);
+});
+
+async function handleCommand(cmdStr) {
+  const parts = cmdStr.split(" ");
+  const cmd = parts[0].toLowerCase();
+  
+  if (cmd === "/chart" || cmd === "/c") {
+    const sym = parts[1];
+    const intv = parts[2];
+    if (sym) {
+      const upperSym = sym.toUpperCase();
+      try {
+        await fetchFromApi(`/api/quotes/${encodeURIComponent(upperSym)}`);
+        addToHistory(upperSym);
+        selectSymbol(upperSym);
+      } catch (err) {
+        setStatus(`Symbol not found: ${upperSym}`, "error");
+      }
+    }
+    if (intv && ["1m", "2m", "5m", "15m", "1h", "1d", "1wk"].includes(intv)) {
+      activeInterval = intv;
+      document.querySelectorAll(".time-selector button").forEach(b => b.classList.toggle("active", b.dataset.int === intv));
+      fetchData();
+    }
+  } else if (cmd === "/clear") {
+    savedWatchlist = ["BTC-USD"];
+    localStorage.setItem("traderWatchlist", JSON.stringify(savedWatchlist));
+    fetchData();
+  }
+}
+
 els.command.addEventListener("keydown", async (event) => {
-  if (event.key !== "Enter") return;
-  const requested = symbolAlias(els.command.value);
-  if (!requested) return;
-  els.command.value = "";
-  try {
-    // Validate by fetching quote
-    await fetchFromApi(`/api/quotes/${encodeURIComponent(requested)}`);
-    addToHistory(requested);
-    selectSymbol(requested);
-  } catch (err) {
-    setStatus(`Symbol not found: ${requested}`, "error");
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    if (!searchDropdown.classList.contains("hidden") && searchSelectedIndex < searchResults.length - 1) {
+      searchSelectedIndex++;
+      updateSearchSelection();
+    }
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!searchDropdown.classList.contains("hidden") && searchSelectedIndex > 0) {
+      searchSelectedIndex--;
+      updateSearchSelection();
+    }
+  } else if (event.key === "Enter") {
+    if (!searchDropdown.classList.contains("hidden") && searchSelectedIndex >= 0) {
+      event.preventDefault();
+      selectSearchResult(searchSelectedIndex);
+      return;
+    }
+    const requested = els.command.value.trim();
+    if (!requested) return;
+    
+    if (requested.startsWith("/")) {
+      handleCommand(requested);
+      els.command.value = "";
+      return;
+    }
+    
+    els.command.value = "";
+    searchDropdown.classList.add("hidden");
+    const alias = symbolAlias(requested);
+    try {
+      await fetchFromApi(`/api/quotes/${encodeURIComponent(alias)}`);
+      addToHistory(alias);
+      selectSymbol(alias);
+    } catch (err) {
+      setStatus(`Symbol not found: ${alias}`, "error");
+    }
+  } else if (event.key === "Escape") {
+    searchDropdown.classList.add("hidden");
   }
 });
 

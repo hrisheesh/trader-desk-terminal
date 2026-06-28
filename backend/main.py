@@ -691,6 +691,30 @@ async def stream(symbol: str, websocket: WebSocket) -> None:
         await websocket.send_json({"type": "error", "symbol": normalized, "message": str(exc)})
 
 
+import urllib.parse
+
+@app.get("/api/search")
+async def search(q: str):
+    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(q)}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail="Search failed")
+        data = response.json()
+        quotes = data.get("quotes", [])
+        return {
+            "results": [
+                {
+                    "symbol": item.get("symbol"),
+                    "name": item.get("shortname") or item.get("longname"),
+                    "exchange": item.get("exchange"),
+                    "type": item.get("quoteType")
+                }
+                for item in quotes if item.get("symbol")
+            ]
+        }
+
 frontend_dir = Path(__file__).resolve().parents[1] / "frontend"
 if frontend_dir.exists():
     app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
