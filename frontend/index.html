@@ -81,7 +81,7 @@
             <div><span>Volume</span><strong id="metric-volume">--</strong></div>
             <div><span>Venue</span><strong id="metric-venue">--</strong></div>
           </div>
-          <div id="chart-wrap" class="chart-wrap" style="position: relative; width: 100%; height: 430px;">
+          <div id="chart-wrap" class="chart-wrap" style="position: relative; width: 100%; height: 350px;">
             <div class="chart-toolbar" aria-label="Chart controls">
               <div id="timeframe-controls" class="segmented glass-panel">
                 <button type="button" data-interval="1m" class="active">1m</button>
@@ -98,6 +98,22 @@
             </div>
             <div id="price-chart" style="width: 100%; height: 100%;"></div>
           </div>
+          
+          <div id="rsi-wrap" class="chart-wrap" style="position: relative; width: 100%; height: 120px; border-top: none;">
+            <div id="rsi-chart" style="width: 100%; height: 100%;"></div>
+          </div>
+
+          <div class="lightning-strip glass-panel">
+            <div class="strip-left">
+              <span id="pos-tracker">NO OPEN POSITION</span>
+            </div>
+            <div class="strip-right">
+              <button id="btn-lightning-buy" class="action-btn buy-btn">BUY MKT</button>
+              <button id="btn-lightning-sell" class="action-btn sell-btn">SELL MKT</button>
+              <button id="btn-lightning-flatten" class="action-btn flatten-btn">FLATTEN</button>
+            </div>
+          </div>
+
           <p id="chart-caption" class="caption">Waiting for intraday candles.</p>
           <div class="lower-console">
             <section>

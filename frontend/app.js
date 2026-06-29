@@ -69,12 +69,17 @@ let alerts = [];
 let detail = null;
 let signals = [];
 let chartCandles = [];
-let liveCandleUpdates = new Map();
 let baseRestCandles = [];
-let lastCandlePayload = null;
 let lwChart = null;
 let lwSeries = null;
 let lwLineSeries = null;
+let lwVolumeSeries = null;
+let lwRsiChart = null;
+let lwRsiSeries = null;
+let lastCandlePayload = null;
+let activeFeed = null;
+let isRealtime = false;
+let liveCandleUpdates = new Map();
 let pendingFocusRender = false;
 let refreshTimer = null;
 let flowTimer = null;
@@ -128,6 +133,10 @@ const els = {
   modalTitle: document.querySelector("#modal-title"),
   portfolioList: document.querySelector("#portfolio-list"),
   historyList: document.querySelector("#history-list"),
+  lightningBuy: document.querySelector("#btn-lightning-buy"),
+  lightningSell: document.querySelector("#btn-lightning-sell"),
+  lightningFlatten: document.querySelector("#btn-lightning-flatten"),
+  posTracker: document.querySelector("#pos-tracker"),
 };
 
 function updateStorage() {
@@ -137,6 +146,36 @@ function updateStorage() {
   localStorage.setItem("trader-desk-trade-history", JSON.stringify(tradeHistory));
   localStorage.setItem("trader-desk-wallet-cash", walletCash.toString());
   localStorage.setItem("trader-desk-wallet-start", startingBalance.toString());
+  updateLightningTracker();
+}
+
+function updateLightningTracker() {
+  if (!els.posTracker) return;
+  const currentQ = quotes.find(q => q.symbol === activeSymbol);
+  const currentPrice = currentQ ? currentQ.price : (detail ? (detail.lastTradePrice || detail.regularMarketPrice) : 0);
+  
+  const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
+  if (existingLots.length === 0) {
+    els.posTracker.innerHTML = "NO OPEN POSITION";
+    els.posTracker.className = "";
+    if (els.lightningFlatten) els.lightningFlatten.style.display = "none";
+    return;
+  }
+  
+  if (els.lightningFlatten) els.lightningFlatten.style.display = "block";
+  let totalQty = 0;
+  let totalCost = 0;
+  existingLots.forEach(lot => {
+    totalQty += lot.qty;
+    totalCost += (lot.qty * lot.avgPrice);
+  });
+  
+  const avgEntry = totalCost / totalQty;
+  const pnl = (currentPrice - avgEntry) * totalQty;
+  const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  
+  els.posTracker.innerHTML = `<span>${totalQty.toFixed(2)} @ $${avgEntry.toFixed(2)}</span> | P&L: <span style="color: ${pnlColor}">$${pnl.toFixed(2)}</span>`;
+  els.posTracker.className = "active-pos";
 }
 
 function renderWallet() {
@@ -153,11 +192,13 @@ function renderWallet() {
   
   const totalValue = walletCash + portfolioValue;
   const pnl = totalValue - startingBalance;
-  const pnlPercent = (pnl / startingBalance) * 100;
+  const pnlPct = startingBalance > 0 ? (pnl / startingBalance) * 100 : 0;
   
-  elsBalance.textContent = `$${formatPrice(walletCash)}`;
-  elsPnl.textContent = `${pnl > 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`;
-  elsPnl.className = toneClass(pnl);
+  elsBalance.textContent = `$${formatPrice(totalValue)}`;
+  elsPnl.textContent = `${pnl >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`;
+  elsPnl.className = pnl >= 0 ? "positive" : "negative";
+
+  updateLightningTracker();
 }
 
 window.editWalletBalance = function() {
@@ -703,10 +744,47 @@ function renderChart() {
       color: 'cyan',
       lineWidth: 2,
     });
+
+    lwVolumeSeries = lwChart.addHistogramSeries({
+      color: '#26a69a',
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+    });
+    lwChart.priceScale('').applyOptions({
+      scaleMargins: { top: 0.8, bottom: 0 },
+    });
+
+    const rsiContainer = document.getElementById("rsi-chart");
+    if (rsiContainer) {
+      rsiContainer.innerHTML = "";
+      lwRsiChart = LightweightCharts.createChart(rsiContainer, {
+        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9aa697' },
+        grid: { vertLines: { color: 'rgba(255, 255, 255, 0.05)' }, horzLines: { color: 'rgba(255, 255, 255, 0.05)' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: 'rgba(255, 255, 255, 0.1)' },
+        timeScale: { borderColor: 'rgba(255, 255, 255, 0.1)', timeVisible: true, secondsVisible: false },
+      });
+      lwRsiSeries = lwRsiChart.addLineSeries({ color: '#9d4edd', lineWidth: 1.5 });
+      
+      // Add RSI reference lines (30, 70)
+      lwRsiSeries.createPriceLine({ price: 70, color: 'rgba(255,255,255,0.2)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+      lwRsiSeries.createPriceLine({ price: 30, color: 'rgba(255,255,255,0.2)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+
+      // Sync scrolling
+      lwChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) lwRsiChart.timeScale().setVisibleLogicalRange(range);
+      });
+      lwRsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) lwChart.timeScale().setVisibleLogicalRange(range);
+      });
+    }
   }
 
   // Ensure resizing works
-  lwChart.applyOptions({ width: container.clientWidth || 900, height: container.clientHeight || 430 });
+  lwChart.applyOptions({ width: container.clientWidth || 900, height: container.clientHeight || 350 });
+  if (lwRsiChart) {
+    lwRsiChart.applyOptions({ width: document.getElementById("rsi-wrap").clientWidth || 900, height: 120 });
+  }
 
   if (chartCandles.length === 0) {
      return;
@@ -723,7 +801,8 @@ function renderChart() {
       high: c.high,
       low: c.low,
       close: c.close,
-      value: c.close // for line series
+      value: c.close, // for line series
+      volume: c.volume || 0 // for volume
     };
   });
 
@@ -738,6 +817,38 @@ function renderChart() {
   }
   
   uniqueData.sort((a, b) => a.time - b.time);
+
+  // Extract Volume Data
+  const volumeData = uniqueData.map(d => ({
+    time: d.time,
+    value: d.volume,
+    color: d.close >= d.open ? 'rgba(46, 255, 136, 0.4)' : 'rgba(255, 76, 86, 0.4)'
+  }));
+
+  // Calculate RSI Data
+  const rsiData = [];
+  if (uniqueData.length > 14) {
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= 14; i++) {
+        let change = uniqueData[i].close - uniqueData[i - 1].close;
+        if (change > 0) gains += change;
+        else losses -= change;
+    }
+    let avgGain = gains / 14;
+    let avgLoss = losses / 14;
+    for (let i = 14; i < uniqueData.length; i++) {
+        let change = uniqueData[i].close - uniqueData[i - 1].close;
+        if (i > 14) {
+            let gain = change > 0 ? change : 0;
+            let loss = change < 0 ? -change : 0;
+            avgGain = (avgGain * 13 + gain) / 14;
+            avgLoss = (avgLoss * 13 + loss) / 14;
+        }
+        let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        let rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + rs));
+        rsiData.push({ time: uniqueData[i].time, value: rsi });
+    }
+  }
 
   // Clear existing price lines
   if (lwSeries.priceLines) {
@@ -755,6 +866,8 @@ function renderChart() {
   
   inactiveSeries.setData([]);
   activeSeries.setData(uniqueData);
+  if (lwVolumeSeries) lwVolumeSeries.setData(volumeData);
+  if (lwRsiSeries) lwRsiSeries.setData(rsiData);
 
   const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
   existingLots.forEach(lot => {
@@ -1055,18 +1168,52 @@ function bindControls() {
     
     // reset/update inputs
     els.orderQty.value = 1;
-    els.orderTotal.textContent = `$${formatPrice(price * 1)}`;
+    updateOrderTotal();
   }
 
   els.btnBuy.addEventListener("click", () => openTradeModal("buy"));
   els.btnSell.addEventListener("click", () => openTradeModal("sell"));
 
+  els.orderQty.addEventListener("input", updateOrderTotal);
+  els.modalPrice.addEventListener("input", updateOrderTotal);
+
+  if (els.lightningBuy) {
+    els.lightningBuy.addEventListener("click", () => {
+      const q = quotes.find(q => q.symbol === activeSymbol);
+      const price = q ? q.price : (detail ? (detail.lastTradePrice || detail.regularMarketPrice) : 0);
+      if (!price) return;
+      const qty = Math.floor((walletCash * 0.1) / price) || 1; // 10% of wallet or 1 share
+      executeTrade(activeSymbol, "buy", qty, price);
+    });
+  }
+
+  if (els.lightningSell) {
+    els.lightningSell.addEventListener("click", () => {
+      const q = quotes.find(q => q.symbol === activeSymbol);
+      const price = q ? q.price : (detail ? (detail.lastTradePrice || detail.regularMarketPrice) : 0);
+      if (!price) return;
+      const qty = Math.floor((walletCash * 0.1) / price) || 1; // 10% of wallet or 1 share
+      executeTrade(activeSymbol, "sell", qty, price);
+    });
+  }
+
+  if (els.lightningFlatten) {
+    els.lightningFlatten.addEventListener("click", () => {
+      const q = quotes.find(q => q.symbol === activeSymbol);
+      const price = q ? q.price : (detail ? (detail.lastTradePrice || detail.regularMarketPrice) : 0);
+      if (!price) return;
+      
+      const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
+      existingLots.forEach(lot => {
+         executeTrade(activeSymbol, "sell", lot.qty, price, lot.id);
+      });
+    });
+  }
+
   els.modalClose.addEventListener("click", () => {
     els.orderModal.classList.add("hidden");
   });
 
-  els.orderQty.addEventListener("input", (e) => {
-    const q = quotes.find(quote => quote.symbol === activeSymbol);
     const price = q ? q.price : 0;
     const qty = parseFloat(e.target.value) || 0;
     els.orderTotal.textContent = `$${formatPrice(price * qty)}`;
