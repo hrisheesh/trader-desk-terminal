@@ -244,26 +244,22 @@ function renderPortfolio() {
   els.portfolioList.innerHTML = savedPortfolio.map(pos => {
     const q = quotes.find(quote => quote.symbol === pos.symbol);
     const currentPrice = q ? q.price : pos.avgPrice;
-    
-    const totalValue = pos.qty * currentPrice;
-    const costBasis = pos.qty * pos.avgPrice;
-    
-    const pnl = totalValue - costBasis;
-    const pnlPercent = (pnl / costBasis) * 100;
-    
-    const isWatchlist = savedWatchlist.includes(pos.symbol);
-    const actionIcon = isWatchlist ? "-" : "+";
+    const pnl = (currentPrice - pos.avgPrice) * pos.qty;
+    const pnlPercent = ((currentPrice - pos.avgPrice) / pos.avgPrice) * 100;
     
     return `
-      <div class="watch-row ${pos.symbol === activeSymbol ? "active" : ""}" onclick="selectSymbol('${pos.symbol}')">
-        <div class="watch-left">
-          <strong><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${pos.color};margin-right:4px;"></span>${pos.symbol} <b>${formatPrice(currentPrice)}</b></strong>
-          <span>
-            <small class="portfolio-qty">${pos.qty} @ ${formatPrice(pos.avgPrice)}</small>
-            <small class="portfolio-pnl ${toneClass(pnl)}">${pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(pnl))} (${pnlPercent.toFixed(2)}%)</small>
-          </span>
+      <div class="portfolio-item ${pos.symbol === activeSymbol ? "active" : ""}" onclick="selectSymbol('${pos.symbol}')">
+        <div class="port-row main">
+          <strong><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${pos.color};margin-right:6px;"></span>${pos.symbol}</strong>
+          <b>$${formatPrice(currentPrice)}</b>
         </div>
-        <button class="rail-action-btn" style="background:var(--red); color:#000; font-size:10px; font-weight:bold; width:auto; padding:4px 8px; border-radius:4px;" onclick="event.stopPropagation(); executeTrade('${pos.symbol}', 'sell', ${pos.qty}, ${currentPrice}, '${pos.id}')">SELL</button>
+        <div class="port-row meta">
+          <span>${pos.qty} @ $${formatPrice(pos.avgPrice)}</span>
+          <span class="${toneClass(pnl)}">${pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(pnl))} (${pnlPercent.toFixed(2)}%)</span>
+        </div>
+        <div class="port-row action">
+          <button class="port-sell-btn" onclick="event.stopPropagation(); executeTrade('${pos.symbol}', 'sell', ${pos.qty}, ${currentPrice}, '${pos.id}')">SELL</button>
+        </div>
       </div>
     `;
   }).join("");
@@ -341,6 +337,7 @@ function executeTrade(symbol, side, qty, price, id = null) {
   updateStorage();
   if (activeTab === "portfolio") renderPortfolio();
   if (activeTab === "history") renderHistory();
+  renderChart();
 }
 
 function renderTicker() {
@@ -426,10 +423,21 @@ function renderFocus() {
   els.marketState.textContent = detail.isRealtime ? "LIVE COINBASE" : "DELAYED EQUITY";
   const isPinned = savedWatchlist.includes(activeSymbol);
   els.pinBtn.textContent = isPinned ? "Unpin" : "Pin";
+  
+  // Also update quote in global quotes array so portfolio stays ultra live
+  const existingQuoteIdx = quotes.findIndex(q => q.symbol === activeSymbol);
+  if (existingQuoteIdx > -1) {
+    quotes[existingQuoteIdx] = { symbol: activeSymbol, price: detail.price, change: detail.change, changePercent: detail.changePercent };
+  } else {
+    quotes.push({ symbol: activeSymbol, price: detail.price, change: detail.change, changePercent: detail.changePercent });
+  }
+  
+  if (activeTab === "portfolio") renderPortfolio();
+  
+  pendingFocusRender = false;
   els.pinBtn.className = isPinned ? "pin-btn active" : "pin-btn";
   updateChartCaption();
   renderChart();
-  renderSignals();
 }
 
 function updateChartCaption(extra = "") {
@@ -693,6 +701,10 @@ function renderChart() {
     if (posY >= plot.top && posY <= height - plot.bottom) {
       positionLines += `
         <line x1="${plot.left}" x2="${plotRight}" y1="${posY}" y2="${posY}" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1.5" stroke-dasharray="4 4" class="position-line"></line>
+        <g style="pointer-events: none;">
+          <rect x="${plot.left + 5}" y="${posY - 8}" width="42" height="16" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1" rx="2"></rect>
+          <text x="${plot.left + 26}" y="${posY + 3}" fill="${lot.color || 'var(--cyan)'}" font-size="9" text-anchor="middle" font-weight="bold">${formatPrice(lot.avgPrice)}</text>
+        </g>
       `;
     }
   });
@@ -761,19 +773,28 @@ function renderTape(payload) {
 }
 
 async function loadDesk() {
-  const symbols = activeTab === "watchlist" ? savedWatchlist : savedHistory;
+  let symbols = [];
+  if (activeTab === "watchlist") symbols = savedWatchlist;
+  else if (activeTab === "portfolio") symbols = Array.from(new Set(savedPortfolio.map(p => p.symbol)));
+  else if (activeTab === "history") symbols = Array.from(new Set(tradeHistory.map(t => t.symbol)));
+  
   if (!symbols.length) {
     quotes = [];
-    renderWatchlist();
+    if (activeTab === "watchlist") renderWatchlist();
+    else if (activeTab === "portfolio") renderPortfolio();
     return;
   }
+  
   const payload = await fetchFromApi(`/api/desk?symbols=${encodeURIComponent(symbols.join(","))}`);
   quotes = payload.quotes || [];
   pulse = payload.pulse;
   alerts = payload.alerts || [];
   signals = payload.signals || [];
   els.clock.textContent = shortTime(payload.fetchedAt);
-  renderWatchlist();
+  
+  if (activeTab === "watchlist") renderWatchlist();
+  else if (activeTab === "portfolio") renderPortfolio();
+  
   renderTicker();
   renderPulse();
   renderSignals();
