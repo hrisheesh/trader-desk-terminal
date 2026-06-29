@@ -24,6 +24,14 @@ let savedHistory = (() => {
     return [];
   }
 })();
+let savedPortfolio = (() => {
+  try {
+    const data = JSON.parse(localStorage.getItem("trader-desk-portfolio"));
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    return [];
+  }
+})();
 let activeTab = "watchlist";
 
 let activeSymbol = "BTC-USD";
@@ -79,11 +87,30 @@ const els = {
   timeframeControls: document.querySelector("#timeframe-controls"),
   chartModeControls: document.querySelector("#chart-mode-controls"),
   railTabs: document.querySelector("#rail-tabs"),
+  historyList: document.querySelector("#history-list"),
+  portfolioList: document.querySelector("#portfolio-list"),
+  btnBuy: document.querySelector("#btn-buy"),
+  btnSell: document.querySelector("#btn-sell"),
+  orderModal: document.querySelector("#order-modal"),
+  modalClose: document.querySelector("#modal-close"),
+  modalConfirm: document.querySelector("#modal-confirm"),
+  orderQty: document.querySelector("#order-qty"),
+  orderTotal: document.querySelector("#order-total"),
+  modalPrice: document.querySelector("#modal-price"),
+  modalTitle: document.querySelector("#modal-title"),
+  positionTooltip: document.querySelector("#position-tooltip"),
+  ptSymbol: document.querySelector("#pt-symbol"),
+  ptQty: document.querySelector("#pt-qty"),
+  ptAvg: document.querySelector("#pt-avg"),
+  ptCur: document.querySelector("#pt-cur"),
+  ptDiff: document.querySelector("#pt-diff"),
+  ptSellBtn: document.querySelector("#pt-sell-btn"),
 };
 
 function updateStorage() {
   localStorage.setItem("trader-desk-watchlist", JSON.stringify(savedWatchlist));
   localStorage.setItem("trader-desk-history", JSON.stringify(savedHistory));
+  localStorage.setItem("trader-desk-portfolio", JSON.stringify(savedPortfolio));
 }
 
 window.toggleWatchlist = function (symbol) {
@@ -201,6 +228,80 @@ function renderWatchlist() {
       `;
     })
     .join("");
+}
+
+const LOT_COLORS = ["#00ffff", "#ff00ff", "#ffff00", "#ffa500", "#0088ff", "#8a2be2", "#ff1493", "#00fa9a", "#ff6347"];
+
+function renderPortfolio() {
+  if (savedPortfolio.length === 0) {
+    els.portfolioList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No positions yet. Buy something!</div>`;
+    return;
+  }
+  
+  els.portfolioList.innerHTML = savedPortfolio.map(pos => {
+    const q = quotes.find(quote => quote.symbol === pos.symbol);
+    const currentPrice = q ? q.price : pos.avgPrice;
+    
+    const totalValue = pos.qty * currentPrice;
+    const costBasis = pos.qty * pos.avgPrice;
+    
+    const pnl = totalValue - costBasis;
+    const pnlPercent = (pnl / costBasis) * 100;
+    
+    const isWatchlist = savedWatchlist.includes(pos.symbol);
+    const actionIcon = isWatchlist ? "-" : "+";
+    
+    return `
+      <div class="watch-row ${pos.symbol === activeSymbol ? "active" : ""}" onclick="selectSymbol('${pos.symbol}')">
+        <div class="watch-left">
+          <strong><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${pos.color};margin-right:4px;"></span>${pos.symbol} <b>${formatPrice(currentPrice)}</b></strong>
+          <span>
+            <small class="portfolio-qty">${pos.qty} @ ${formatPrice(pos.avgPrice)}</small>
+            <small class="portfolio-pnl ${toneClass(pnl)}">${pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(pnl))} (${pnlPercent.toFixed(2)}%)</small>
+          </span>
+        </div>
+        <button class="rail-action-btn" onclick="event.stopPropagation(); toggleWatchlist('${pos.symbol}')">${actionIcon}</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function executeTrade(symbol, side, qty, price, id = null) {
+  if (side === "buy") {
+    // Determine the next color based on the number of existing lots for this symbol
+    const existingLots = savedPortfolio.filter(p => p.symbol === symbol).length;
+    const color = LOT_COLORS[existingLots % LOT_COLORS.length];
+    const newId = Date.now().toString() + Math.floor(Math.random() * 1000);
+    
+    savedPortfolio.push({ id: newId, symbol, qty, avgPrice: price, color });
+  } else if (side === "sell") {
+    if (id) {
+      const existingIdx = savedPortfolio.findIndex(p => p.id === id);
+      if (existingIdx > -1) {
+        const existing = savedPortfolio[existingIdx];
+        existing.qty -= qty;
+        if (existing.qty <= 0) {
+          savedPortfolio.splice(existingIdx, 1);
+        }
+      }
+    } else {
+      // If no ID provided (e.g. from general sell button without tooltip), sell FIFO from all lots
+      let qtyToSell = qty;
+      const matchingLots = savedPortfolio.filter(p => p.symbol === symbol);
+      for (const lot of matchingLots) {
+        if (qtyToSell <= 0) break;
+        if (lot.qty <= qtyToSell) {
+          qtyToSell -= lot.qty;
+          savedPortfolio = savedPortfolio.filter(p => p.id !== lot.id);
+        } else {
+          lot.qty -= qtyToSell;
+          qtyToSell = 0;
+        }
+      }
+    }
+  }
+  updateStorage();
+  if (activeTab === "portfolio") renderPortfolio();
 }
 
 function renderTicker() {
@@ -545,6 +646,24 @@ function renderChart() {
       .join("");
   }
 
+  let positionLines = "";
+  const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
+  
+  existingLots.forEach((lot, i) => {
+    const posY = scale.y(lot.avgPrice);
+    if (posY >= plot.top && posY <= height - plot.bottom) {
+      // Stagger badges horizontally so they don't completely overlap if at similar prices
+      const badgeX = plot.left + 5 + (i * 65);
+      positionLines += `
+        <line x1="${plot.left}" x2="${plotRight}" y1="${posY}" y2="${posY}" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1.5" stroke-dasharray="4 4" class="position-line"></line>
+        <g class="position-badge-group" onclick="window.togglePositionTooltip('${lot.id}')">
+          <rect x="${badgeX}" y="${posY - 10}" width="55" height="20" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" rx="4" class="position-badge"></rect>
+          <text x="${badgeX + 27.5}" y="${posY + 4}" fill="${lot.color || 'var(--cyan)'}" font-size="11" text-anchor="middle" font-weight="bold">$${formatPrice(lot.avgPrice)}</text>
+        </g>
+      `;
+    }
+  });
+
   const last = candles.at(-1);
   const lastTone = last.close >= last.open ? "#2eff88" : "#ff4c56";
   const lastY = scale.y(last.close);
@@ -556,8 +675,30 @@ function renderChart() {
     <line x1="${plot.left}" x2="${plotRight}" y1="${lastY}" y2="${lastY}" stroke="${lastTone}" stroke-width="1" stroke-dasharray="2 3"></line>
     <path d="M${plotRight + 4} ${lastY} L${plotRight + 10} ${lastY - 9} H${width - 6} V${lastY + 9} H${plotRight + 10} Z" fill="#000" stroke="${lastTone}"></path>
     <text x="${plotRight + 14}" y="${lastY + 4}" fill="${lastTone}" font-size="12" font-weight="bold">${formatPrice(last.close)}</text>
+    ${positionLines}
   `;
 }
+
+window.togglePositionTooltip = function(id) {
+  const existing = savedPortfolio.find(p => p.id === id);
+  if (!existing) return;
+  const q = quotes.find(quote => quote.symbol === activeSymbol);
+  const currentPrice = q ? q.price : existing.avgPrice;
+  const diff = currentPrice - existing.avgPrice;
+  const diffPct = (diff / existing.avgPrice) * 100;
+  
+  els.ptSymbol.textContent = activeSymbol;
+  els.ptQty.textContent = existing.qty;
+  els.ptAvg.textContent = `$${formatPrice(existing.avgPrice)}`;
+  els.ptCur.textContent = `$${formatPrice(currentPrice)}`;
+  els.ptDiff.textContent = `${diff > 0 ? "+" : ""}$${formatPrice(Math.abs(diff))} (${diffPct.toFixed(2)}%)`;
+  els.ptDiff.className = toneClass(diff);
+  
+  // Store the active lot ID on the sell button for reference
+  els.ptSellBtn.dataset.lotId = id;
+  
+  els.positionTooltip.classList.toggle("hidden");
+};
 
 function scheduleFocusRender() {
   if (pendingFocusRender) return;
@@ -785,6 +926,18 @@ function bindControls() {
     button.addEventListener("click", () => {
       activeTab = button.dataset.tab;
       setActiveButtons(els.railTabs, "tab", activeTab);
+      
+      els.watchlist.classList.add("hidden");
+      els.historyList.classList.add("hidden");
+      els.portfolioList.classList.add("hidden");
+      
+      if (activeTab === "watchlist") {
+        els.watchlist.classList.remove("hidden");
+      } else if (activeTab === "history") {
+        els.historyList.classList.remove("hidden");
+      } else if (activeTab === "portfolio") {
+        els.portfolioList.classList.remove("hidden");
+      }
       loadDesk();
     });
   });
@@ -798,6 +951,61 @@ function bindControls() {
     updateStorage();
     renderFocus();
     if (activeTab === "watchlist") loadDesk();
+  });
+
+  // Trade Modal Listeners
+  let currentTradeSide = "buy";
+
+  function openTradeModal(side) {
+    currentTradeSide = side;
+    const q = quotes.find(quote => quote.symbol === activeSymbol);
+    const price = q ? q.price : 0;
+    
+    els.modalTitle.textContent = `${side.toUpperCase()} ${activeSymbol}`;
+    els.modalPrice.textContent = formatPrice(price);
+    
+    els.orderModal.querySelector(".modal-box").className = `modal-box ${side}-mode`;
+    els.orderModal.classList.remove("hidden");
+    
+    // reset/update inputs
+    els.orderQty.value = 1;
+    els.orderTotal.textContent = `$${formatPrice(price * 1)}`;
+  }
+
+  els.btnBuy.addEventListener("click", () => openTradeModal("buy"));
+  els.btnSell.addEventListener("click", () => openTradeModal("sell"));
+
+  els.modalClose.addEventListener("click", () => {
+    els.orderModal.classList.add("hidden");
+  });
+
+  els.orderQty.addEventListener("input", (e) => {
+    const q = quotes.find(quote => quote.symbol === activeSymbol);
+    const price = q ? q.price : 0;
+    const qty = parseFloat(e.target.value) || 0;
+    els.orderTotal.textContent = `$${formatPrice(price * qty)}`;
+  });
+
+  els.modalConfirm.addEventListener("click", () => {
+    const q = quotes.find(quote => quote.symbol === activeSymbol);
+    const price = q ? q.price : 0;
+    const qty = parseFloat(els.orderQty.value) || 0;
+    if (qty > 0 && price > 0) {
+      executeTrade(activeSymbol, currentTradeSide, qty, price);
+      els.orderModal.classList.add("hidden");
+    }
+  });
+
+  els.ptSellBtn.addEventListener("click", () => {
+    const lotId = els.ptSellBtn.dataset.lotId;
+    const existing = savedPortfolio.find(p => p.id === lotId);
+    if (!existing) return;
+    const q = quotes.find(quote => quote.symbol === activeSymbol);
+    const price = q ? q.price : existing.avgPrice;
+    
+    // Execute a sell of the specific lot
+    executeTrade(activeSymbol, "sell", existing.qty, price, lotId);
+    els.positionTooltip.classList.add("hidden");
   });
 }
 

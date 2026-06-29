@@ -32,11 +32,13 @@
             <div class="rail-tabs" id="rail-tabs">
               <button data-tab="watchlist" class="active">Watchlist</button>
               <button data-tab="history">History</button>
+              <button data-tab="portfolio">Portfolio</button>
             </div>
             <button id="refresh-button" type="button">Sync</button>
           </div>
           <div id="watchlist" class="watchlist loading">Loading symbols...</div>
           <div id="history-list" class="watchlist hidden"></div>
+          <div id="portfolio-list" class="watchlist hidden"></div>
         </aside>
 
         <section class="focus-panel" aria-label="Selected symbol detail">
@@ -53,7 +55,11 @@
               <strong id="header-signal" style="padding: 2px 6px; border-radius: 4px;">--</strong>
               <span id="header-target" style="font-size: 12px; color: var(--muted);"></span>
             </div>
-            <button id="pin-button" class="pin-btn">Pin</button>
+            <div style="display: flex; gap: 6px;">
+              <button id="btn-buy" class="trade-btn buy-btn">Buy</button>
+              <button id="btn-sell" class="trade-btn sell-btn">Sell</button>
+              <button id="pin-button" class="pin-btn">Pin</button>
+            </div>
           </div>
           <div class="metric-row">
             <div><span>High</span><strong id="metric-high">--</strong></div>
@@ -74,8 +80,29 @@
               <button type="button" data-mode="line">Line</button>
             </div>
           </div>
-          <div id="chart-wrap" class="chart-wrap">
+          <div id="chart-wrap" class="chart-wrap" style="position: relative;">
             <svg id="price-chart" viewBox="0 0 900 430" role="img" aria-label="Intraday price chart"></svg>
+            <div id="position-tooltip" class="position-tooltip hidden">
+              <div class="pt-header">
+                <span id="pt-symbol">BTC-USD</span>
+                <span class="pt-qty" id="pt-qty">1.0</span>
+              </div>
+              <div class="pt-body">
+                <div class="pt-row">
+                  <span>Bought At</span>
+                  <strong id="pt-avg">--</strong>
+                </div>
+                <div class="pt-row">
+                  <span>Current</span>
+                  <strong id="pt-cur">--</strong>
+                </div>
+                <div class="pt-row">
+                  <span>P&L</span>
+                  <strong id="pt-diff">--</strong>
+                </div>
+              </div>
+              <button id="pt-sell-btn" class="pt-sell-btn">SELL POSITION</button>
+            </div>
           </div>
           <p id="chart-caption" class="caption">Waiting for intraday candles.</p>
           <div class="lower-console">
@@ -132,6 +159,29 @@
         <div id="api-status" class="api-status">API: connecting</div>
       </footer>
     </div>
+    
+    <!-- Order Modal -->
+    <div id="order-modal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3 id="modal-title">Trade --</h3>
+          <button type="button" id="modal-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="modal-price" class="modal-price">--</p>
+          <div class="input-group">
+            <label for="order-qty">Quantity</label>
+            <input type="number" id="order-qty" step="any" min="0" value="1" />
+          </div>
+          <div class="input-group">
+            <label>Total Value</label>
+            <span id="order-total" style="font-weight: bold;">$0.00</span>
+          </div>
+          <button type="button" id="modal-confirm" class="confirm-btn">Confirm</button>
+        </div>
+      </div>
+    </div>
+    
     <script src="app.js"></script>
   </body>
 </html>

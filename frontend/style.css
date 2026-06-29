@@ -565,3 +565,194 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   color: var(--bg);
   border-color: var(--cyan);
 }
+
+/* Portfolio and Trading styles */
+.trade-btn {
+  background: transparent;
+  color: #fff;
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.trade-btn.buy-btn:hover {
+  background: var(--green);
+  border-color: var(--green);
+  color: #000;
+}
+.trade-btn.sell-btn:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #000;
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+.modal-overlay.hidden {
+  display: none;
+}
+.modal-box {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  width: 320px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.1em;
+}
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.5em;
+  cursor: pointer;
+}
+.modal-close:hover {
+  color: #fff;
+}
+.modal-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.modal-price {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.input-group label {
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.input-group input {
+  background: #111a18;
+  border: 1px solid var(--line);
+  color: #fff;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 1em;
+}
+.confirm-btn {
+  background: var(--cyan);
+  color: #000;
+  border: none;
+  padding: 10px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.confirm-btn:hover {
+  opacity: 0.9;
+}
+.modal-box.buy-mode .confirm-btn {
+  background: var(--green);
+}
+.modal-box.sell-mode .confirm-btn {
+  background: var(--red);
+}
+
+.portfolio-qty {
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.portfolio-pnl {
+  font-size: 0.85em;
+  font-weight: bold;
+}
+
+/* Position Tooltip */
+.position-tooltip {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(17, 26, 24, 0.95);
+  border: 1px solid var(--cyan);
+  border-radius: 6px;
+  padding: 12px;
+  width: 200px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.position-tooltip.hidden {
+  display: none;
+}
+.pt-header {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+  font-weight: bold;
+}
+.pt-qty {
+  color: var(--muted);
+}
+.pt-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9em;
+  margin-bottom: 4px;
+}
+.pt-row span {
+  color: var(--muted);
+}
+.pt-sell-btn {
+  background: var(--red);
+  color: #000;
+  border: none;
+  padding: 6px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.pt-sell-btn:hover {
+  opacity: 0.8;
+}
+.position-badge-group {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.position-badge-group:hover rect {
+  opacity: 0.8;
+}
+.position-badge-group:hover text {
+  fill: #fff;
+}
