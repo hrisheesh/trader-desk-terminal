@@ -168,16 +168,7 @@ window.editWalletBalance = function() {
   }
 };
 
-window.setActiveButtons = function(container, dataAttr, matchVal) {
-  const btns = document.querySelectorAll(`${container} button`);
-  btns.forEach(btn => {
-    if (btn.getAttribute(dataAttr) === matchVal) {
-      btn.classList.add("active");
-    } else {
-      btn.classList.remove("active");
-    }
-  });
-};
+// Removed broken duplicate setActiveButtons
 
 window.toggleWatchlist = function (symbol) {
   if (savedWatchlist.includes(symbol)) {

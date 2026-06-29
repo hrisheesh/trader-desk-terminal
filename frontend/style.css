@@ -214,7 +214,8 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   padding: 8px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
 }
 
 .flow-panel {
@@ -288,6 +289,15 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   gap: 2px;
   flex-grow: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.watchlist::-webkit-scrollbar {
+  display: none; /* Hide scrollbar for cleaner UI */
+}
+.watchlist {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 .watch-row {
