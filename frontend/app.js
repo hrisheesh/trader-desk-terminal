@@ -3,8 +3,8 @@ const DESK_INTERVAL_MS = 1500;
 const FLOW_INTERVAL_MS = 1200;
 const CANDLE_REFRESH_MS = 30000;
 const CRYPTO_SYMBOLS = new Set(["BTC-USD", "ETH-USD"]);
-const INTERVAL_SECONDS = { "1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600 };
-const VISIBLE_BARS = { "1m": 80, "2m": 72, "5m": 84, "15m": 80, "30m": 72, "1h": 72 };
+const INTERVAL_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400 };
+const VISIBLE_BARS = { "1m": 80, "5m": 84, "15m": 80, "1h": 72, "6h": 60, "1d": 90 };
 
 let apiBase = API_CANDIDATES[0];
 const DEFAULT_SYMBOLS = ["NVDA", "AAPL", "TSLA", "MSFT", "BTC-USD", "ETH-USD", "SOXL", "SPY"];

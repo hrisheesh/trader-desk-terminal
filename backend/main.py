@@ -31,9 +31,9 @@ COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 HTTP_TIMEOUT = 10.0
 EQUITY_CACHE_TTL_SECONDS = 15
 CRYPTO_CACHE_TTL_SECONDS = 0.75
-SUPPORTED_INTERVALS = {"1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600}
-YAHOO_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "1h"}
-COINBASE_GRANULARITIES = {60, 300, 900, 3600}
+SUPPORTED_INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400}
+YAHOO_INTERVALS = {"1m", "5m", "15m", "1h", "1d"}
+COINBASE_GRANULARITIES = {60, 300, 900, 3600, 21600, 86400}
 UPSTREAM_HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json,text/plain,*/*",
@@ -250,8 +250,6 @@ async def _candles_for_symbol(symbol: str, interval: str, tz_offset_minutes: int
 
     if symbol in CRYPTO_SYMBOLS:
         granularity = interval_seconds if interval_seconds in COINBASE_GRANULARITIES else 60
-        if interval_seconds == 3600:
-            granularity = 300 # Fetch 5m to allow timezone shifting
         try:
             payload = await _fetch_yahoo_json(
                 COINBASE_CANDLES_URL.format(symbol=symbol),
@@ -278,9 +276,18 @@ async def _candles_for_symbol(symbol: str, interval: str, tz_offset_minutes: int
 
     fetch_interval = interval
     range_param = "1d"
-    if interval == "1h":
-        fetch_interval = "5m"
+    
+    if interval == "1m":
+        range_param = "1d"
+    elif interval == "5m" or interval == "15m":
         range_param = "5d"
+    elif interval == "1h":
+        range_param = "1mo"
+    elif interval == "6h":
+        fetch_interval = "1h"
+        range_param = "3mo"
+    elif interval == "1d":
+        range_param = "1y"
         
     if fetch_interval not in YAHOO_INTERVALS:
         raise HTTPException(status_code=400, detail="Yahoo equity feed does not support this interval")
