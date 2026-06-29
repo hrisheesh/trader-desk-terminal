@@ -32,6 +32,14 @@ let savedPortfolio = (() => {
     return [];
   }
 })();
+let tradeHistory = (() => {
+  try {
+    const data = JSON.parse(localStorage.getItem("trader-desk-trade-history"));
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    return [];
+  }
+})();
 let activeTab = "watchlist";
 
 let activeSymbol = "BTC-USD";
@@ -98,19 +106,14 @@ const els = {
   orderTotal: document.querySelector("#order-total"),
   modalPrice: document.querySelector("#modal-price"),
   modalTitle: document.querySelector("#modal-title"),
-  positionTooltip: document.querySelector("#position-tooltip"),
-  ptSymbol: document.querySelector("#pt-symbol"),
-  ptQty: document.querySelector("#pt-qty"),
-  ptAvg: document.querySelector("#pt-avg"),
-  ptCur: document.querySelector("#pt-cur"),
-  ptDiff: document.querySelector("#pt-diff"),
-  ptSellBtn: document.querySelector("#pt-sell-btn"),
+  historyList: document.querySelector("#history-list"),
 };
 
 function updateStorage() {
   localStorage.setItem("trader-desk-watchlist", JSON.stringify(savedWatchlist));
   localStorage.setItem("trader-desk-history", JSON.stringify(savedHistory));
   localStorage.setItem("trader-desk-portfolio", JSON.stringify(savedPortfolio));
+  localStorage.setItem("trader-desk-trade-history", JSON.stringify(tradeHistory));
 }
 
 window.toggleWatchlist = function (symbol) {
@@ -260,13 +263,41 @@ function renderPortfolio() {
             <small class="portfolio-pnl ${toneClass(pnl)}">${pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(pnl))} (${pnlPercent.toFixed(2)}%)</small>
           </span>
         </div>
-        <button class="rail-action-btn" onclick="event.stopPropagation(); toggleWatchlist('${pos.symbol}')">${actionIcon}</button>
+        <button class="rail-action-btn" style="background:var(--red); color:#000; font-size:10px; font-weight:bold; width:auto; padding:4px 8px; border-radius:4px;" onclick="event.stopPropagation(); executeTrade('${pos.symbol}', 'sell', ${pos.qty}, ${currentPrice}, '${pos.id}')">SELL</button>
       </div>
     `;
   }).join("");
 }
 
+function renderHistory() {
+  if (tradeHistory.length === 0) {
+    els.historyList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No trade history.</div>`;
+    return;
+  }
+  
+  els.historyList.innerHTML = tradeHistory.map(trade => {
+    const isBuy = trade.type === "BUY";
+    const pnlDisplay = !isBuy && trade.pnl !== undefined 
+      ? `<small class="${toneClass(trade.pnl)}">${trade.pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(trade.pnl))}</small>` 
+      : "";
+      
+    return `
+      <div class="watch-row">
+        <div class="watch-left">
+          <strong><span class="${isBuy ? "up" : "down"}">${trade.type}</span> ${trade.symbol} <b>@ ${formatPrice(trade.price)}</b></strong>
+          <span>
+            <small class="portfolio-qty">Qty: ${trade.qty} | ${trade.timestamp}</small>
+            ${pnlDisplay}
+          </span>
+        </div>
+      </div>
+    `;
+  }).reverse().join("");
+}
+
 function executeTrade(symbol, side, qty, price, id = null) {
+  const timestamp = new Date().toLocaleTimeString();
+  
   if (side === "buy") {
     // Determine the next color based on the number of existing lots for this symbol
     const existingLots = savedPortfolio.filter(p => p.symbol === symbol).length;
@@ -274,11 +305,14 @@ function executeTrade(symbol, side, qty, price, id = null) {
     const newId = Date.now().toString() + Math.floor(Math.random() * 1000);
     
     savedPortfolio.push({ id: newId, symbol, qty, avgPrice: price, color });
+    tradeHistory.push({ type: "BUY", symbol, qty, price, timestamp });
   } else if (side === "sell") {
+    let pnl = 0;
     if (id) {
       const existingIdx = savedPortfolio.findIndex(p => p.id === id);
       if (existingIdx > -1) {
         const existing = savedPortfolio[existingIdx];
+        pnl = (price - existing.avgPrice) * qty;
         existing.qty -= qty;
         if (existing.qty <= 0) {
           savedPortfolio.splice(existingIdx, 1);
@@ -290,6 +324,9 @@ function executeTrade(symbol, side, qty, price, id = null) {
       const matchingLots = savedPortfolio.filter(p => p.symbol === symbol);
       for (const lot of matchingLots) {
         if (qtyToSell <= 0) break;
+        const sellQty = Math.min(lot.qty, qtyToSell);
+        pnl += (price - lot.avgPrice) * sellQty;
+        
         if (lot.qty <= qtyToSell) {
           qtyToSell -= lot.qty;
           savedPortfolio = savedPortfolio.filter(p => p.id !== lot.id);
@@ -299,9 +336,11 @@ function executeTrade(symbol, side, qty, price, id = null) {
         }
       }
     }
+    tradeHistory.push({ type: "SELL", symbol, qty, price, timestamp, pnl });
   }
   updateStorage();
   if (activeTab === "portfolio") renderPortfolio();
+  if (activeTab === "history") renderHistory();
 }
 
 function renderTicker() {
@@ -649,17 +688,11 @@ function renderChart() {
   let positionLines = "";
   const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
   
-  existingLots.forEach((lot, i) => {
+  existingLots.forEach((lot) => {
     const posY = scale.y(lot.avgPrice);
     if (posY >= plot.top && posY <= height - plot.bottom) {
-      // Keep all badges on the left edge as requested
-      const badgeX = plot.left + 5;
       positionLines += `
         <line x1="${plot.left}" x2="${plotRight}" y1="${posY}" y2="${posY}" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1.5" stroke-dasharray="4 4" class="position-line"></line>
-        <g class="position-badge-group" onclick="window.togglePositionTooltip('${lot.id}', event)">
-          <rect x="${badgeX}" y="${posY - 10}" width="55" height="20" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" rx="4" class="position-badge"></rect>
-          <text x="${badgeX + 27.5}" y="${posY + 4}" fill="${lot.color || 'var(--cyan)'}" font-size="11" text-anchor="middle" font-weight="bold">$${formatPrice(lot.avgPrice)}</text>
-        </g>
       `;
     }
   });
@@ -679,43 +712,7 @@ function renderChart() {
   `;
 }
 
-window.togglePositionTooltip = function(id, event) {
-  const existing = savedPortfolio.find(p => p.id === id);
-  if (!existing) return;
-  const q = quotes.find(quote => quote.symbol === activeSymbol);
-  const currentPrice = q ? q.price : existing.avgPrice;
-  const diff = currentPrice - existing.avgPrice;
-  const diffPct = (diff / existing.avgPrice) * 100;
-  
-  els.ptSymbol.textContent = activeSymbol;
-  els.ptQty.textContent = existing.qty;
-  els.ptAvg.textContent = `$${formatPrice(existing.avgPrice)}`;
-  els.ptCur.textContent = `$${formatPrice(currentPrice)}`;
-  els.ptDiff.textContent = `${diff > 0 ? "+" : ""}$${formatPrice(Math.abs(diff))} (${diffPct.toFixed(2)}%)`;
-  els.ptDiff.className = toneClass(diff);
-  
-  // Store the active lot ID on the sell button for reference
-  els.ptSellBtn.dataset.lotId = id;
-  
-  if (event) {
-    const chartWrap = document.querySelector('.chart-wrap');
-    const wrapRect = chartWrap.getBoundingClientRect();
-    const x = event.clientX - wrapRect.left + 10;
-    const y = event.clientY - wrapRect.top - 20;
-    els.positionTooltip.style.left = `${x}px`;
-    els.positionTooltip.style.top = `${y}px`;
-    els.positionTooltip.style.transform = `none`;
-  }
-  
-  els.positionTooltip.classList.remove("hidden");
-};
-
-// Also hide tooltip if clicking outside
-document.addEventListener("click", (e) => {
-  if (!e.target.closest("#position-tooltip") && !e.target.closest(".position-badge-group")) {
-    els.positionTooltip.classList.add("hidden");
-  }
-});
+// Tooltip logic removed as per plan
 
 function scheduleFocusRender() {
   if (pendingFocusRender) return;
@@ -950,15 +947,16 @@ function bindControls() {
       
       if (activeTab === "watchlist") {
         els.watchlist.classList.remove("hidden");
-      } else if (activeTab === "history") {
-        els.historyList.classList.remove("hidden");
+        renderWatchlist();
       } else if (activeTab === "portfolio") {
         els.portfolioList.classList.remove("hidden");
+        renderPortfolio();
+      } else if (activeTab === "history") {
+        els.historyList.classList.remove("hidden");
+        renderHistory();
       }
-      loadDesk();
     });
   });
-
   els.pinBtn.addEventListener("click", () => {
     if (savedWatchlist.includes(activeSymbol)) {
       savedWatchlist = savedWatchlist.filter((s) => s !== activeSymbol);
@@ -1011,18 +1009,6 @@ function bindControls() {
       executeTrade(activeSymbol, currentTradeSide, qty, price);
       els.orderModal.classList.add("hidden");
     }
-  });
-
-  els.ptSellBtn.addEventListener("click", () => {
-    const lotId = els.ptSellBtn.dataset.lotId;
-    const existing = savedPortfolio.find(p => p.id === lotId);
-    if (!existing) return;
-    const q = quotes.find(quote => quote.symbol === activeSymbol);
-    const price = q ? q.price : existing.avgPrice;
-    
-    // Execute a sell of the specific lot
-    executeTrade(activeSymbol, "sell", existing.qty, price, lotId);
-    els.positionTooltip.classList.add("hidden");
   });
 }
 
