@@ -1214,11 +1214,6 @@ function bindControls() {
     els.orderModal.classList.add("hidden");
   });
 
-    const price = q ? q.price : 0;
-    const qty = parseFloat(e.target.value) || 0;
-    els.orderTotal.textContent = `$${formatPrice(price * qty)}`;
-  });
-
   els.modalConfirm.addEventListener("click", () => {
     const q = quotes.find(quote => quote.symbol === activeSymbol);
     const price = q ? q.price : 0;
