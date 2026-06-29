@@ -18,7 +18,6 @@ let savedWatchlist = (() => {
 })();
 let savedHistory = (() => {
   try {
-    localStorage.removeItem("trader-desk-history"); // FORCE WIPE
     const data = JSON.parse(localStorage.getItem("trader-desk-history"));
     return Array.isArray(data) ? data : [];
   } catch (e) {
@@ -27,7 +26,6 @@ let savedHistory = (() => {
 })();
 let savedPortfolio = (() => {
   try {
-    localStorage.removeItem("trader-desk-portfolio"); // FORCE WIPE
     const data = JSON.parse(localStorage.getItem("trader-desk-portfolio"));
     return Array.isArray(data) ? data : [];
   } catch (e) {
@@ -165,13 +163,16 @@ function renderWallet() {
 }
 
 window.editWalletBalance = function() {
-  const newBalance = prompt("Enter new starting balance ($):", startingBalance);
+  const newBalance = prompt("Enter new starting balance ($). WARNING: This will reset your portfolio and trade history!", startingBalance);
   if (newBalance !== null && !isNaN(parseFloat(newBalance))) {
-    const diff = parseFloat(newBalance) - startingBalance;
     startingBalance = parseFloat(newBalance);
-    walletCash += diff; // Adjust cash by the difference
+    walletCash = startingBalance;
+    savedPortfolio = [];
+    tradeHistory = [];
     updateStorage();
     renderWallet();
+    renderPortfolio();
+    renderHistory();
   }
 };
 
