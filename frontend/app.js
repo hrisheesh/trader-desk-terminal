@@ -72,6 +72,9 @@ let chartCandles = [];
 let liveCandleUpdates = new Map();
 let baseRestCandles = [];
 let lastCandlePayload = null;
+let lwChart = null;
+let lwSeries = null;
+let lwLineSeries = null;
 let pendingFocusRender = false;
 let refreshTimer = null;
 let flowTimer = null;
@@ -123,13 +126,8 @@ const els = {
   orderTotal: document.querySelector("#order-total"),
   modalPrice: document.querySelector("#modal-price"),
   modalTitle: document.querySelector("#modal-title"),
+  portfolioList: document.querySelector("#portfolio-list"),
   historyList: document.querySelector("#history-list"),
-  chartHitbox: document.querySelector("#chart-hitbox"),
-  crosshairX: document.querySelector("#crosshair-x"),
-  crosshairY: document.querySelector("#crosshair-y"),
-  crosshairLabels: document.querySelector("#crosshair-labels"),
-  crosshairXLabel: document.querySelector("#crosshair-x-label"),
-  crosshairYLabel: document.querySelector("#crosshair-y-label")
 };
 
 function updateStorage() {
@@ -665,155 +663,105 @@ function applyTickToCandle(tick) {
   }
 }
 
-function chartScale(candles, width, height, plot) {
-  const lows = candles.map((candle) => candle.low);
-  const highs = candles.map((candle) => candle.high);
-  let min = Math.min(...lows);
-  let max = Math.max(...highs);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) {
-    min = 0;
-    max = 1;
-  }
-  const rawSpan = max - min;
-  const padding = rawSpan > 0 ? rawSpan * 0.12 : Math.max(Math.abs(max) * 0.002, 0.01);
-  min -= padding;
-  max += padding;
-  const span = max - min || 1;
-  const y = (price) => plot.top + ((max - price) / span) * (height - plot.top - plot.bottom);
-  const x = (index) => plot.left + (index / Math.max(candles.length - 1, 1)) * (width - plot.left - plot.right);
-  return { min, max, span, x, y };
-}
-
 function renderChart() {
-  const svg = els.chart;
-  svg.innerHTML = "";
-  const vLimit = visibleLimit();
-  const maxPan = Math.max(0, chartCandles.length - vLimit);
-  panOffset = Math.max(0, Math.min(panOffset, maxPan));
-  const endIndex = chartCandles.length - Math.floor(panOffset);
-  const startIndex = Math.max(0, endIndex - vLimit);
-  const candles = chartCandles.slice(startIndex, endIndex);
-  if (!candles.length) {
-    svg.innerHTML = `<text x="32" y="72" fill="#9aa697" font-size="20">No real candle data from upstream</text>`;
-    return;
+  const container = els.chart;
+  if (!lwChart) {
+    container.innerHTML = "";
+    lwChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth || 900,
+      height: container.clientHeight || 430,
+      layout: {
+        background: { type: 'solid', color: 'transparent' },
+        textColor: '#9aa697',
+      },
+      grid: {
+        vertLines: { color: 'rgba(255, 255, 255, 0.05)' },
+        horzLines: { color: '#26332b' },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+      },
+      rightPriceScale: {
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+      },
+      timeScale: {
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+    });
+    
+    lwSeries = lwChart.addCandlestickSeries({
+      upColor: '#2eff88',
+      downColor: '#ff4c56',
+      borderVisible: false,
+      wickUpColor: '#2eff88',
+      wickDownColor: '#ff4c56'
+    });
+    
+    lwLineSeries = lwChart.addLineSeries({
+      color: '#cyan',
+      lineWidth: 2,
+    });
   }
 
-  const width = 900;
-  const height = 430;
-  const plot = { left: 22, right: 108, top: 24, bottom: 42 };
-  const scale = chartScale(candles, width, height, plot);
-  activeChartScale = { ...scale, width, height, plot };
-  const plotRight = width - plot.right;
-  const grid = [0, 0.25, 0.5, 0.75, 1]
-    .map((step) => {
-      const price = scale.max - scale.span * step;
-      const y = plot.top + step * (height - plot.top - plot.bottom);
-      return `
-        <line x1="${plot.left}" x2="${plotRight}" y1="${y}" y2="${y}" stroke="#26332b"></line>
-        <text x="${plotRight + 12}" y="${y + 6}" fill="#9aa697" font-size="16">${formatPrice(price)}</text>
-      `;
-    })
-    .join("");
+  // Ensure resizing works
+  lwChart.applyOptions({ width: container.clientWidth || 900, height: container.clientHeight || 430 });
 
-  let xAxis = "";
-  const tickCount = 6;
-  const drawnIndices = new Set();
-  for (let i = 0; i < tickCount; i++) {
-    const index = Math.floor((candles.length - 1) * (i / (tickCount - 1)));
-    if (drawnIndices.has(index)) continue;
-    drawnIndices.add(index);
-    const c = candles[index];
-    if (c) {
-      const xPos = scale.x(index);
-      
-      // Round to nearest logical boundary for cleaner labels
-      let timeStr = "";
-      const intervalMsVal = intervalMs();
-      const dt = new Date(c.timestamp || toTimestamp(c.time));
-      
-      const showDate = intervalMsVal >= 900000; // >= 15 minutes
-      if (activeInterval.endsWith("d")) {
-        timeStr = dt.toLocaleDateString([], { month: "short", day: "numeric" });
-      } else if (showDate) {
-        timeStr = dt.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-      } else {
-        timeStr = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-      }
-      
-      let anchor = "middle";
-      let xOff = xPos;
-      if (i === 0) { anchor = "start"; xOff = plot.left; }
-      if (i === tickCount - 1) { anchor = "end"; xOff = plotRight - 4; }
-      xAxis += `<text x="${xOff}" y="${height - 14}" fill="#737373" font-size="11" text-anchor="${anchor}">${timeStr}</text>`;
-      xAxis += `<line x1="${xPos}" x2="${xPos}" y1="${plot.top}" y2="${height - 30}" stroke="rgba(255,255,255,0.05)" stroke-width="1"></line>`;
-    }
+  if (chartCandles.length === 0) {
+     return;
   }
 
-  const slot = (plotRight - plot.left) / Math.max(candles.length, 1);
-  const bodyWidth = Math.max(5, Math.min(13, slot * 0.58));
-  let series = "";
+  // Format data for Lightweight Charts (requires time in seconds)
+  const lwData = chartCandles.map(c => ({
+    time: c.timestamp / 1000,
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+    value: c.close // for line series
+  }));
 
-  if (chartMode === "line") {
-    const points = candles.map((candle, index) => `${scale.x(index).toFixed(2)},${scale.y(candle.close).toFixed(2)}`).join(" ");
-    const last = candles.at(-1);
-    const lastTone = (detail?.change || 0) >= 0 ? "#00ff66" : "#ff3333";
-    series = `
-      <polyline points="${points}" fill="none" stroke="${lastTone}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
-      <circle cx="${scale.x(candles.length - 1)}" cy="${scale.y(last.close)}" r="3" fill="${lastTone}"></circle>
-    `;
-  } else {
-    series = candles
-      .map((candle, index) => {
-        const x = scale.x(index);
-        const openY = scale.y(candle.open);
-        const closeY = scale.y(candle.close);
-        const highY = scale.y(candle.high);
-        const lowY = scale.y(candle.low);
-        const up = candle.close >= candle.open;
-        const tone = up ? "#2eff88" : "#ff4c56";
-        const top = Math.min(openY, closeY);
-        const bodyHeight = Math.max(1, Math.abs(closeY - openY));
-        const fill = up ? "#2eff88" : "#ff4c56";
-        return `
-          <line class="candle wick" x1="${x}" x2="${x}" y1="${highY}" y2="${lowY}" stroke="${tone}" stroke-width="1"></line>
-          <rect class="candle body" x="${x - bodyWidth / 2}" y="${top}" width="${bodyWidth}" height="${bodyHeight}" fill="${fill}" stroke="${tone}" stroke-width="1"></rect>
-        `;
-      })
-      .join("");
+  // Remove duplicates by time (Lightweight charts requires unique ascending times)
+  const uniqueData = [];
+  const seenTimes = new Set();
+  for (const item of lwData) {
+     if (!seenTimes.has(item.time)) {
+         seenTimes.add(item.time);
+         uniqueData.push(item);
+     }
   }
 
-  let positionLines = "";
-  const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
+  // Clear existing price lines
+  if (lwSeries.priceLines) {
+     lwSeries.priceLines.forEach(pl => lwSeries.removePriceLine(pl));
+  }
+  lwSeries.priceLines = [];
   
-  existingLots.forEach((lot) => {
-    const posY = scale.y(lot.avgPrice);
-    if (posY >= plot.top && posY <= height - plot.bottom) {
-      positionLines += `
-        <line x1="${plot.left}" x2="${plotRight}" y1="${posY}" y2="${posY}" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1.5" stroke-dasharray="4 4" class="position-line"></line>
-        <g style="pointer-events: none;">
-          <rect x="${plot.left + 5}" y="${posY - 8}" width="56" height="16" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1" rx="2"></rect>
-          <text x="${plot.left + 33}" y="${posY + 3}" fill="${lot.color || 'var(--cyan)'}" font-size="9" text-anchor="middle" font-weight="bold">${formatPrice(lot.avgPrice)}</text>
-        </g>
-      `;
-    }
+  if (lwLineSeries.priceLines) {
+     lwLineSeries.priceLines.forEach(pl => lwLineSeries.removePriceLine(pl));
+  }
+  lwLineSeries.priceLines = [];
+
+  const activeSeries = chartMode === "line" ? lwLineSeries : lwSeries;
+  const inactiveSeries = chartMode === "line" ? lwSeries : lwLineSeries;
+  
+  inactiveSeries.setData([]);
+  activeSeries.setData(uniqueData);
+
+  const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
+  existingLots.forEach(lot => {
+     const pl = activeSeries.createPriceLine({
+         price: lot.avgPrice,
+         color: lot.color || 'cyan',
+         lineWidth: 2,
+         lineStyle: LightweightCharts.LineStyle.Dashed,
+         axisLabelVisible: true,
+         title: `${lot.qty} @ ${lot.avgPrice}`
+     });
+     activeSeries.priceLines.push(pl);
   });
-
-  const last = candles.at(-1);
-  const lastTone = last.close >= last.open ? "#2eff88" : "#ff4c56";
-  const lastY = scale.y(last.close);
-  svg.innerHTML = `
-    <rect x="${plot.left}" y="${plot.top}" width="${plotRight - plot.left}" height="${height - plot.top - plot.bottom}" fill="rgba(5,10,7,0.34)"></rect>
-    ${grid}
-    ${xAxis}
-    ${series}
-    <line x1="${plot.left}" x2="${plotRight}" y1="${lastY}" y2="${lastY}" stroke="${lastTone}" stroke-width="1" stroke-dasharray="2 3"></line>
-    <path d="M${plotRight + 4} ${lastY} L${plotRight + 10} ${lastY - 9} H${width - 6} V${lastY + 9} H${plotRight + 10} Z" fill="#000" stroke="${lastTone}"></path>
-    <text x="${plotRight + 14}" y="${lastY + 4}" fill="${lastTone}" font-size="12" font-weight="bold">${formatPrice(last.close)}</text>
-    ${positionLines}
-  `;
 }
-
-// Tooltip logic removed as per plan
 
 function scheduleFocusRender() {
   if (pendingFocusRender) return;
@@ -1126,68 +1074,6 @@ function bindControls() {
       els.orderModal.classList.add("hidden");
     }
   });
-
-  els.chartHitbox.addEventListener("mousemove", (e) => {
-    if (!activeChartScale) return;
-    const rect = els.chartHitbox.getBoundingClientRect();
-    
-    // Convert screen coordinates to SVG viewBox (900x430) coordinates
-    const scaleX = 900 / rect.width;
-    const scaleY = 430 / rect.height;
-    
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
-    
-    const { plot, minPrice, maxPrice, span, getX, getY } = activeChartScale;
-    
-    // Boundary check for plot area
-    if (x < plot.left || x > 900 - plot.right || y < plot.top || y > 430 - plot.bottom) {
-      els.crosshairX.classList.add("hidden");
-      els.crosshairY.classList.add("hidden");
-      els.crosshairLabels.classList.add("hidden");
-      return;
-    }
-    
-    els.crosshairX.classList.remove("hidden");
-    els.crosshairY.classList.remove("hidden");
-    els.crosshairLabels.classList.remove("hidden");
-    
-    els.crosshairX.setAttribute("x1", x);
-    els.crosshairX.setAttribute("x2", x);
-    els.crosshairY.setAttribute("y1", y);
-    els.crosshairY.setAttribute("y2", y);
-    
-    // Calculate price corresponding to Y
-    const plotHeight = 430 - plot.top - plot.bottom;
-    const priceRatio = 1 - ((y - plot.top) / plotHeight);
-    const price = minPrice + (span * priceRatio);
-    els.crosshairYLabel.textContent = formatPrice(price);
-    document.getElementById("crosshair-y-bg").setAttribute("y", y - 10);
-    els.crosshairYLabel.setAttribute("y", y + 4);
-    
-    // Calculate time corresponding to X (reverse getX)
-    const plotWidth = 900 - plot.left - plot.right;
-    const numCandles = chartCandles.length;
-    let timeLabel = "--";
-    if (numCandles > 0) {
-       const candleWidth = Math.max(1, plotWidth / (numCandles || 1));
-       const index = Math.floor((x - plot.left) / candleWidth);
-       if (index >= 0 && index < numCandles) {
-          const c = chartCandles[index];
-          timeLabel = new Date(c.timestamp || toTimestamp(c.time)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-       }
-    }
-    
-    els.crosshairXLabel.textContent = timeLabel;
-    document.getElementById("crosshair-x-bg").setAttribute("x", x - 35);
-    els.crosshairXLabel.setAttribute("x", x);
-  });
-
-  els.chartHitbox.addEventListener("mouseleave", () => {
-    els.crosshairX.classList.add("hidden");
-    els.crosshairY.classList.add("hidden");
-    els.crosshairLabels.classList.add("hidden");
-  });
 }
 
 function startTimers() {
@@ -1255,22 +1141,6 @@ document.addEventListener("click", (e) => {
 window.addEventListener("resize", renderChart);
 window.addEventListener("resize", renderFocus);
 
-els.chart.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  isPanning = true;
-  lastPanX = e.clientX;
-});
-window.addEventListener("mousemove", (e) => {
-  if (!isPanning) return;
-  const dx = e.clientX - lastPanX;
-  if (Math.abs(dx) > 0) {
-    const pixelsPerBar = (window.innerWidth - 120) / visibleLimit();
-    panOffset += dx / pixelsPerBar;
-    lastPanX = e.clientX;
-    renderChart();
-  }
-});
-window.addEventListener("mouseup", () => isPanning = false);
 
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {

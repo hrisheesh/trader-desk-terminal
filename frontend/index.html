@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Trader Desk Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -94,19 +95,8 @@
               <button type="button" data-mode="line">Line</button>
             </div>
           </div>
-          <div id="chart-wrap" class="chart-wrap" style="position: relative;">
-            <svg id="price-chart" viewBox="0 0 900 430" role="img" aria-label="Intraday price chart"></svg>
-            <svg id="chart-overlay" viewBox="0 0 900 430" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;" aria-hidden="true">
-              <line id="crosshair-x" class="crosshair-line hidden" x1="0" y1="0" x2="0" y2="430" stroke="var(--cyan)" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"></line>
-              <line id="crosshair-y" class="crosshair-line hidden" x1="0" y1="0" x2="900" y2="0" stroke="var(--cyan)" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"></line>
-              <g id="crosshair-labels" class="hidden">
-                <rect id="crosshair-y-bg" x="830" y="-10" width="70" height="20" fill="var(--bg-panel)" stroke="var(--cyan)" stroke-width="1" rx="2"></rect>
-                <text id="crosshair-y-label" x="865" y="4" fill="var(--cyan)" font-size="10" font-family="'JetBrains Mono', monospace" text-anchor="middle" font-weight="bold">--</text>
-                <rect id="crosshair-x-bg" x="-35" y="415" width="70" height="15" fill="var(--bg-panel)" stroke="var(--cyan)" stroke-width="1" rx="2"></rect>
-                <text id="crosshair-x-label" x="0" y="426" fill="var(--cyan)" font-size="10" font-family="'JetBrains Mono', monospace" text-anchor="middle">--</text>
-              </g>
-            </svg>
-            <div id="chart-hitbox" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; cursor: crosshair;"></div>
+          <div id="chart-wrap" class="chart-wrap" style="position: relative; width: 100%; height: 430px;">
+            <div id="price-chart" style="width: 100%; height: 100%;"></div>
           </div>
           <p id="chart-caption" class="caption">Waiting for intraday candles.</p>
           <div class="lower-console">
