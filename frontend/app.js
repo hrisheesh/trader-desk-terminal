@@ -728,7 +728,7 @@ function renderChart() {
       // Round to nearest logical boundary for cleaner labels
       let timeStr = "";
       const intervalMsVal = intervalMs();
-      const dt = new Date(c.timestamp ? c.timestamp * 1000 : toTimestamp(c.time));
+      const dt = new Date(c.timestamp || toTimestamp(c.time));
       
       const showDate = intervalMsVal >= 900000; // >= 15 minutes
       if (activeInterval.endsWith("d")) {
@@ -1173,7 +1173,7 @@ function bindControls() {
        const index = Math.floor((x - plot.left) / candleWidth);
        if (index >= 0 && index < numCandles) {
           const c = chartCandles[index];
-          timeLabel = new Date(c.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          timeLabel = new Date(c.timestamp || toTimestamp(c.time)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
        }
     }
     
