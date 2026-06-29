@@ -1155,6 +1155,13 @@ function bindControls() {
   // Trade Modal Listeners
   let currentTradeSide = "buy";
 
+  function updateOrderTotal() {
+    const q = quotes.find(quote => quote.symbol === activeSymbol);
+    const price = q ? q.price : (detail ? (detail.lastTradePrice || detail.regularMarketPrice) : 0);
+    const qty = parseFloat(els.orderQty.value) || 0;
+    els.orderTotal.textContent = `$${formatPrice(price * qty)}`;
+  }
+
   function openTradeModal(side) {
     currentTradeSide = side;
     const q = quotes.find(quote => quote.symbol === activeSymbol);
