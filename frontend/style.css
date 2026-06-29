@@ -434,24 +434,50 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
 .metric-row strong { font-size: 13px; color: #fff; }
 
 .chart-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  z-index: 10;
+  pointer-events: none; /* Let clicks pass through empty space */
 }
 
-.segmented {
-  display: flex;
-  border: 1px solid var(--line);
+.chart-toolbar > * {
+  pointer-events: auto; /* Re-enable clicks for buttons */
 }
-.segmented button {
-  background: var(--bg);
+
+.segmented.glass-panel {
+  display: flex;
+  background: rgba(17, 26, 24, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.segmented.glass-panel button {
+  background: transparent;
   border: none;
   border-right: 1px solid var(--line);
-  padding: 2px 8px;
+  padding: 4px 10px;
   font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
-.segmented button:last-child { border: none; }
-.segmented button.active { background: #222; color: #fff; }
+.segmented.glass-panel button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+.segmented.glass-panel button:last-child { border: none; }
+.segmented.glass-panel button.active { 
+  background: rgba(255, 255, 255, 0.1); 
+  color: #fff; 
+  font-weight: 500;
+}
 
 .chart-wrap {
   background: var(--bg);
