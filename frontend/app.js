@@ -780,8 +780,8 @@ function renderChart() {
       positionLines += `
         <line x1="${plot.left}" x2="${plotRight}" y1="${posY}" y2="${posY}" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1.5" stroke-dasharray="4 4" class="position-line"></line>
         <g style="pointer-events: none;">
-          <rect x="${plot.left + 5}" y="${posY - 8}" width="42" height="16" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1" rx="2"></rect>
-          <text x="${plot.left + 26}" y="${posY + 3}" fill="${lot.color || 'var(--cyan)'}" font-size="9" text-anchor="middle" font-weight="bold">${formatPrice(lot.avgPrice)}</text>
+          <rect x="${plot.left + 5}" y="${posY - 8}" width="56" height="16" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1" rx="2"></rect>
+          <text x="${plot.left + 33}" y="${posY + 3}" fill="${lot.color || 'var(--cyan)'}" font-size="9" text-anchor="middle" font-weight="bold">${formatPrice(lot.avgPrice)}</text>
         </g>
       `;
     }

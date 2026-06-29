@@ -278,6 +278,8 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex-grow: 1;
+  overflow-y: auto;
 }
 
 .watch-row {
