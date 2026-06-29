@@ -209,7 +209,15 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
   min-height: 0;
 }
 
-.watch-rail, .flow-panel {
+.watch-rail {
+  background: var(--panel);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.flow-panel {
   background: var(--panel);
   padding: 8px;
   overflow-y: auto;

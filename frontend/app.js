@@ -1057,6 +1057,7 @@ function bindControls() {
         els.historyList.classList.remove("hidden");
         renderHistory();
       }
+      loadDesk();
     });
   });
   els.pinBtn.addEventListener("click", () => {
