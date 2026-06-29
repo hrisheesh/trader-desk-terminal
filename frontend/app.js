@@ -18,6 +18,7 @@ let savedWatchlist = (() => {
 })();
 let savedHistory = (() => {
   try {
+    localStorage.removeItem("trader-desk-history"); // FORCE WIPE
     const data = JSON.parse(localStorage.getItem("trader-desk-history"));
     return Array.isArray(data) ? data : [];
   } catch (e) {
@@ -26,6 +27,7 @@ let savedHistory = (() => {
 })();
 let savedPortfolio = (() => {
   try {
+    localStorage.removeItem("trader-desk-portfolio"); // FORCE WIPE
     const data = JSON.parse(localStorage.getItem("trader-desk-portfolio"));
     return Array.isArray(data) ? data : [];
   } catch (e) {
@@ -274,17 +276,21 @@ function renderHistory() {
   els.historyList.innerHTML = tradeHistory.map(trade => {
     const isBuy = trade.type === "BUY";
     const pnlDisplay = !isBuy && trade.pnl !== undefined 
-      ? `<small class="${toneClass(trade.pnl)}">${trade.pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(trade.pnl))}</small>` 
+      ? `<span class="${toneClass(trade.pnl)}">${trade.pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(trade.pnl))}</span>` 
       : "";
       
     return `
-      <div class="watch-row">
-        <div class="watch-left">
-          <strong><span class="${isBuy ? "up" : "down"}">${trade.type}</span> ${trade.symbol} <b>@ ${formatPrice(trade.price)}</b></strong>
-          <span>
-            <small class="portfolio-qty">Qty: ${trade.qty} | ${trade.timestamp}</small>
-            ${pnlDisplay}
-          </span>
+      <div class="portfolio-item" style="cursor: default;">
+        <div class="port-row main">
+          <strong>
+            <span style="display:inline-block; padding:2px 4px; border-radius:3px; font-size:9px; background:${isBuy ? 'var(--green)' : 'var(--line)'}; color:${isBuy ? '#000' : 'var(--muted)'}; margin-right:6px;">${trade.type}</span>
+            ${trade.symbol}
+          </strong>
+          <b>@ $${formatPrice(trade.price)}</b>
+        </div>
+        <div class="port-row meta">
+          <span>Qty: ${trade.qty} &bull; ${trade.timestamp}</span>
+          ${pnlDisplay}
         </div>
       </div>
     `;
@@ -378,35 +384,6 @@ function renderPulse() {
       return `<div class="alert-row ${alert.level}"><strong class="clickable-ticker" onclick="selectSymbol('${alert.symbol}')">${alert.symbol}</strong><span>${cleanMessage}</span></div>`;
     })
     .join("");
-}
-
-function renderSignals() {
-  const activeSignals = detail?.signals || signals.find((item) => item.symbol === activeSymbol);
-  if (!els.signals) return; // Wait until signals container exists in DOM
-  if (!activeSignals) {
-    els.signals.innerHTML = `<div class="signal-row neutral"><span>Waiting signal data</span></div>`;
-    return;
-  }
-  const dirClass =
-    activeSignals.action === "Buy" ? "positive" : activeSignals.action === "Sell" ? "negative" : "neutral";
-  els.signals.innerHTML = `
-    <div class="signal-tile ${dirClass}">
-      <span>Action</span><strong>${activeSignals.action.toUpperCase()} ${activeSignals.confidence}%</strong>
-    </div>
-    <div class="signal-row"><span>Target</span><strong>${activeSignals.targetPrice ? formatPrice(activeSignals.targetPrice) : 'N/A'}</strong></div>
-    <div class="signal-row"><span>EMA 9 / 21</span><strong>${formatPrice(activeSignals.ema9)} / ${formatPrice(activeSignals.ema21)}</strong></div>
-    <div class="signal-row"><span>RSI 14</span><strong>${formatPrice(activeSignals.rsi14)}</strong></div>
-    <div class="signal-row"><span>VWAP</span><strong>${formatPrice(activeSignals.vwap)}</strong></div>
-    <div class="signal-row"><span>Realized vol</span><strong>${formatPrice(activeSignals.realizedVolatilityPct)}%</strong></div>
-  `;
-  
-  if (els.headerSignal) {
-    els.headerSignal.textContent = activeSignals.action.toUpperCase();
-    els.headerSignal.className = dirClass === "positive" ? "bg-green text-black" : dirClass === "negative" ? "bg-red text-black" : "bg-panel text-white";
-    els.headerSignal.style.backgroundColor = dirClass === "positive" ? "var(--green)" : dirClass === "negative" ? "var(--red)" : "var(--panel)";
-    els.headerSignal.style.color = dirClass !== "neutral" ? "var(--bg)" : "inherit";
-    els.headerTarget.textContent = activeSignals.targetPrice ? `Target: ${formatPrice(activeSignals.targetPrice)}` : '';
-  }
 }
 
 function renderFocus() {
@@ -797,7 +774,6 @@ async function loadDesk() {
   
   renderTicker();
   renderPulse();
-  renderSignals();
 }
 
 async function loadCandles() {

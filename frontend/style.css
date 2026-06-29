@@ -11,6 +11,10 @@
   --cyan: #00ddff;
 }
 
+.hidden {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
