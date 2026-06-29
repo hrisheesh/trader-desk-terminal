@@ -60,11 +60,12 @@ let tradeHistory = (() => {
 })();
 let activeTab = "watchlist";
 
-let activeSymbol = "BTC-USD";
+let activeSymbol = null;
 let activeInterval = "1m";
 let chartMode = "candles";
-let quotes = [];
 let previousPrices = new Map();
+let quotes = [];
+let activeChartScale = null;
 let pulse = null;
 let alerts = [];
 let detail = null;
@@ -125,6 +126,12 @@ const els = {
   modalPrice: document.querySelector("#modal-price"),
   modalTitle: document.querySelector("#modal-title"),
   historyList: document.querySelector("#history-list"),
+  chartHitbox: document.querySelector("#chart-hitbox"),
+  crosshairX: document.querySelector("#crosshair-x"),
+  crosshairY: document.querySelector("#crosshair-y"),
+  crosshairLabels: document.querySelector("#crosshair-labels"),
+  crosshairXLabel: document.querySelector("#crosshair-x-label"),
+  crosshairYLabel: document.querySelector("#crosshair-y-label")
 };
 
 function updateStorage() {
@@ -301,8 +308,12 @@ function renderPortfolio() {
     const pnl = (currentPrice - pos.avgPrice) * pos.qty;
     const pnlPercent = ((currentPrice - pos.avgPrice) / pos.avgPrice) * 100;
     
+    // determine flash if quote updated
+    const prior = previousPrices.get(pos.symbol);
+    const flash = prior !== undefined && currentPrice !== prior ? (currentPrice > prior ? "flash-up" : "flash-down") : "";
+    
     return `
-      <div class="portfolio-item ${pos.symbol === activeSymbol ? "active" : ""}" onclick="selectSymbol('${pos.symbol}')">
+      <div class="portfolio-item ${pos.symbol === activeSymbol ? "active" : ""} ${flash}" onclick="selectSymbol('${pos.symbol}')">
         <div class="port-row main">
           <strong><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${pos.color};margin-right:6px;"></span>${pos.symbol}</strong>
           <b>$${formatPrice(currentPrice)}</b>
@@ -331,8 +342,15 @@ function renderHistory() {
     const q = quotes.find(quote => quote.symbol === sym);
     const p = q ? q.price : "--";
     const isActive = sym === activeSymbol ? "active" : "";
+    
+    let flash = "";
+    if (q) {
+      const prior = previousPrices.get(sym);
+      flash = prior !== undefined && p !== prior ? (p > prior ? "flash-up" : "flash-down") : "";
+    }
+    
     return `
-      <div class="watch-row ${isActive}" onclick="selectSymbol('${sym}')">
+      <div class="watch-row ${isActive} ${flash}" onclick="selectSymbol('${sym}')">
         <div class="watch-left">
           <strong>${sym}</strong>
         </div>
@@ -683,6 +701,7 @@ function renderChart() {
   const height = 430;
   const plot = { left: 22, right: 108, top: 24, bottom: 42 };
   const scale = chartScale(candles, width, height, plot);
+  activeChartScale = { ...scale, width, height, plot };
   const plotRight = width - plot.right;
   const grid = [0, 0.25, 0.5, 0.75, 1]
     .map((step) => {
@@ -1038,14 +1057,16 @@ function bindControls() {
       els.historyList.classList.add("hidden");
       els.portfolioList.classList.add("hidden");
       
+      const target = activeTab === "watchlist" ? els.watchlist : activeTab === "portfolio" ? els.portfolioList : els.historyList;
+      target.classList.remove("hidden", "fade-in");
+      void target.offsetWidth; // force reflow for animation
+      target.classList.add("fade-in");
+      
       if (activeTab === "watchlist") {
-        els.watchlist.classList.remove("hidden");
         renderWatchlist();
       } else if (activeTab === "portfolio") {
-        els.portfolioList.classList.remove("hidden");
         renderPortfolio();
       } else if (activeTab === "history") {
-        els.historyList.classList.remove("hidden");
         renderHistory();
       }
       loadDesk();
@@ -1103,6 +1124,68 @@ function bindControls() {
       executeTrade(activeSymbol, currentTradeSide, qty, price);
       els.orderModal.classList.add("hidden");
     }
+  });
+
+  els.chartHitbox.addEventListener("mousemove", (e) => {
+    if (!activeChartScale) return;
+    const rect = els.chartHitbox.getBoundingClientRect();
+    
+    // Convert screen coordinates to SVG viewBox (900x430) coordinates
+    const scaleX = 900 / rect.width;
+    const scaleY = 430 / rect.height;
+    
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    
+    const { plot, minPrice, maxPrice, span, getX, getY } = activeChartScale;
+    
+    // Boundary check for plot area
+    if (x < plot.left || x > 900 - plot.right || y < plot.top || y > 430 - plot.bottom) {
+      els.crosshairX.classList.add("hidden");
+      els.crosshairY.classList.add("hidden");
+      els.crosshairLabels.classList.add("hidden");
+      return;
+    }
+    
+    els.crosshairX.classList.remove("hidden");
+    els.crosshairY.classList.remove("hidden");
+    els.crosshairLabels.classList.remove("hidden");
+    
+    els.crosshairX.setAttribute("x1", x);
+    els.crosshairX.setAttribute("x2", x);
+    els.crosshairY.setAttribute("y1", y);
+    els.crosshairY.setAttribute("y2", y);
+    
+    // Calculate price corresponding to Y
+    const plotHeight = 430 - plot.top - plot.bottom;
+    const priceRatio = 1 - ((y - plot.top) / plotHeight);
+    const price = minPrice + (span * priceRatio);
+    els.crosshairYLabel.textContent = formatPrice(price);
+    document.getElementById("crosshair-y-bg").setAttribute("y", y - 10);
+    els.crosshairYLabel.setAttribute("y", y + 4);
+    
+    // Calculate time corresponding to X (reverse getX)
+    const plotWidth = 900 - plot.left - plot.right;
+    const numCandles = chartCandles.length;
+    let timeLabel = "--";
+    if (numCandles > 0) {
+       const candleWidth = Math.max(1, plotWidth / (numCandles || 1));
+       const index = Math.floor((x - plot.left) / candleWidth);
+       if (index >= 0 && index < numCandles) {
+          const c = chartCandles[index];
+          timeLabel = new Date(c.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+       }
+    }
+    
+    els.crosshairXLabel.textContent = timeLabel;
+    document.getElementById("crosshair-x-bg").setAttribute("x", x - 35);
+    els.crosshairXLabel.setAttribute("x", x);
+  });
+
+  els.chartHitbox.addEventListener("mouseleave", () => {
+    els.crosshairX.classList.add("hidden");
+    els.crosshairY.classList.add("hidden");
+    els.crosshairLabels.classList.add("hidden");
   });
 }
 
