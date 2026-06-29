@@ -700,7 +700,7 @@ function renderChart() {
     });
     
     lwLineSeries = lwChart.addLineSeries({
-      color: '#cyan',
+      color: 'cyan',
       lineWidth: 2,
     });
   }
@@ -713,24 +713,31 @@ function renderChart() {
   }
 
   // Format data for Lightweight Charts (requires time in seconds)
-  const lwData = chartCandles.map(c => ({
-    time: c.timestamp / 1000,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-    value: c.close // for line series
-  }));
+  const tzOffset = new Date().getTimezoneOffset();
+  const lwData = chartCandles.map(c => {
+    let t = c.timestamp;
+    if (!t && c.time) t = toTimestamp(c.time);
+    return {
+      time: Math.floor(t / 1000) - (tzOffset * 60),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      value: c.close // for line series
+    };
+  });
 
   // Remove duplicates by time (Lightweight charts requires unique ascending times)
   const uniqueData = [];
   const seenTimes = new Set();
   for (const item of lwData) {
-     if (!seenTimes.has(item.time)) {
+     if (!seenTimes.has(item.time) && !Number.isNaN(item.time)) {
          seenTimes.add(item.time);
          uniqueData.push(item);
      }
   }
+  
+  uniqueData.sort((a, b) => a.time - b.time);
 
   // Clear existing price lines
   if (lwSeries.priceLines) {
