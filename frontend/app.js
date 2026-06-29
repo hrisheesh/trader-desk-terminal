@@ -74,8 +74,6 @@ let lwChart = null;
 let lwSeries = null;
 let lwLineSeries = null;
 let lwVolumeSeries = null;
-let lwRsiChart = null;
-let lwRsiSeries = null;
 let lastCandlePayload = null;
 let activeFeed = null;
 let isRealtime = false;
@@ -753,38 +751,10 @@ function renderChart() {
     lwChart.priceScale('').applyOptions({
       scaleMargins: { top: 0.8, bottom: 0 },
     });
-
-    const rsiContainer = document.getElementById("rsi-chart");
-    if (rsiContainer) {
-      rsiContainer.innerHTML = "";
-      lwRsiChart = LightweightCharts.createChart(rsiContainer, {
-        layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9aa697' },
-        grid: { vertLines: { color: 'rgba(255, 255, 255, 0.05)' }, horzLines: { color: 'rgba(255, 255, 255, 0.05)' } },
-        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-        rightPriceScale: { borderColor: 'rgba(255, 255, 255, 0.1)' },
-        timeScale: { borderColor: 'rgba(255, 255, 255, 0.1)', timeVisible: true, secondsVisible: false },
-      });
-      lwRsiSeries = lwRsiChart.addLineSeries({ color: '#9d4edd', lineWidth: 1.5 });
-      
-      // Add RSI reference lines (30, 70)
-      lwRsiSeries.createPriceLine({ price: 70, color: 'rgba(255,255,255,0.2)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
-      lwRsiSeries.createPriceLine({ price: 30, color: 'rgba(255,255,255,0.2)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
-
-      // Sync scrolling
-      lwChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-        if (range) lwRsiChart.timeScale().setVisibleLogicalRange(range);
-      });
-      lwRsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-        if (range) lwChart.timeScale().setVisibleLogicalRange(range);
-      });
-    }
   }
 
   // Ensure resizing works
-  lwChart.applyOptions({ width: container.clientWidth || 900, height: container.clientHeight || 350 });
-  if (lwRsiChart) {
-    lwRsiChart.applyOptions({ width: document.getElementById("rsi-wrap").clientWidth || 900, height: 120 });
-  }
+  lwChart.applyOptions({ width: container.clientWidth || 900, height: container.clientHeight || 450 });
 
   if (chartCandles.length === 0) {
      return;
@@ -825,31 +795,6 @@ function renderChart() {
     color: d.close >= d.open ? 'rgba(46, 255, 136, 0.4)' : 'rgba(255, 76, 86, 0.4)'
   }));
 
-  // Calculate RSI Data
-  const rsiData = [];
-  if (uniqueData.length > 14) {
-    let gains = 0, losses = 0;
-    for (let i = 1; i <= 14; i++) {
-        let change = uniqueData[i].close - uniqueData[i - 1].close;
-        if (change > 0) gains += change;
-        else losses -= change;
-    }
-    let avgGain = gains / 14;
-    let avgLoss = losses / 14;
-    for (let i = 14; i < uniqueData.length; i++) {
-        let change = uniqueData[i].close - uniqueData[i - 1].close;
-        if (i > 14) {
-            let gain = change > 0 ? change : 0;
-            let loss = change < 0 ? -change : 0;
-            avgGain = (avgGain * 13 + gain) / 14;
-            avgLoss = (avgLoss * 13 + loss) / 14;
-        }
-        let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-        let rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + rs));
-        rsiData.push({ time: uniqueData[i].time, value: rsi });
-    }
-  }
-
   // Clear existing price lines
   if (lwSeries.priceLines) {
      lwSeries.priceLines.forEach(pl => lwSeries.removePriceLine(pl));
@@ -867,7 +812,6 @@ function renderChart() {
   inactiveSeries.setData([]);
   activeSeries.setData(uniqueData);
   if (lwVolumeSeries) lwVolumeSeries.setData(volumeData);
-  if (lwRsiSeries) lwRsiSeries.setData(rsiData);
 
   const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
   existingLots.forEach(lot => {
