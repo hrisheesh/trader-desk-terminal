@@ -39,7 +39,12 @@
             <button id="refresh-button" type="button">Sync</button>
           </div>
           <div id="watchlist" class="watchlist loading">Loading symbols...</div>
-          <div id="history-list" class="watchlist hidden"></div>
+          
+          <div id="history-tab" class="watchlist hidden" style="display: flex; flex-direction: column;">
+            <div id="history-chart" style="width: 100%; height: 120px; border-bottom: 1px solid var(--line); flex-shrink: 0;"></div>
+            <div id="history-list" style="flex: 1; overflow-y: auto;"></div>
+          </div>
+          
           <div id="portfolio-list" class="watchlist hidden"></div>
           
           <div id="wallet-panel" class="wallet-panel">

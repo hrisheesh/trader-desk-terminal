@@ -74,6 +74,8 @@ let lwChart = null;
 let lwSeries = null;
 let lwLineSeries = null;
 let lwVolumeSeries = null;
+let lwEma9 = null;
+let lwEma21 = null;
 let lastCandlePayload = null;
 let activeFeed = null;
 let isRealtime = false;
@@ -119,6 +121,8 @@ const els = {
   chartModeControls: document.querySelector("#chart-mode-controls"),
   railTabs: document.querySelector("#rail-tabs"),
   historyList: document.querySelector("#history-list"),
+  historyTab: document.querySelector("#history-tab"),
+  historyChart: document.querySelector("#history-chart"),
   portfolioList: document.querySelector("#portfolio-list"),
   btnBuy: document.querySelector("#btn-buy"),
   btnSell: document.querySelector("#btn-sell"),
@@ -129,13 +133,14 @@ const els = {
   orderTotal: document.querySelector("#order-total"),
   modalPrice: document.querySelector("#modal-price"),
   modalTitle: document.querySelector("#modal-title"),
-  portfolioList: document.querySelector("#portfolio-list"),
-  historyList: document.querySelector("#history-list"),
   lightningBuy: document.querySelector("#btn-lightning-buy"),
   lightningSell: document.querySelector("#btn-lightning-sell"),
   lightningFlatten: document.querySelector("#btn-lightning-flatten"),
   posTracker: document.querySelector("#pos-tracker"),
 };
+
+let lwHistoryChart = null;
+let lwHistorySeries = null;
 
 function updateStorage() {
   localStorage.setItem("trader-desk-watchlist", JSON.stringify(savedWatchlist));
@@ -369,19 +374,18 @@ function renderPortfolio() {
 }
 
 function renderHistory() {
-  const filteredHistory = savedHistory.filter(sym => !savedWatchlist.includes(sym));
-  
-  if (filteredHistory.length === 0) {
+  if (!els.historyList) return;
+  const filteredHistory = tradeHistory.slice().reverse().slice(0, 50); // limit to last 50 for ui performance
+  if (!filteredHistory.length) {
     els.historyList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No recent history.</div>`;
+    if (lwHistorySeries) lwHistorySeries.setData([]);
     return;
   }
   
-  els.historyList.innerHTML = filteredHistory.map(sym => {
-    const q = quotes.find(quote => quote.symbol === sym);
-    const p = q ? q.price : "--";
+  els.historyList.innerHTML = filteredHistory.map(row => {
+    const sym = row.symbol;
     const isActive = sym === activeSymbol ? "active" : "";
     
-    let flash = "";
     if (q) {
       const prior = previousPrices.get(sym);
       flash = prior !== undefined && p !== prior ? (p > prior ? "flash-up" : "flash-down") : "";
@@ -743,6 +747,18 @@ function renderChart() {
       lineWidth: 2,
     });
 
+    lwEma9 = lwChart.addLineSeries({
+      color: '#f9a826', // Orange
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+    });
+
+    lwEma21 = lwChart.addLineSeries({
+      color: '#00b4d8', // Electric Blue
+      lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+    });
+
     lwVolumeSeries = lwChart.addHistogramSeries({
       color: '#26a69a',
       priceFormat: { type: 'volume' },
@@ -795,6 +811,35 @@ function renderChart() {
     color: d.close >= d.open ? 'rgba(46, 255, 136, 0.4)' : 'rgba(255, 76, 86, 0.4)'
   }));
 
+  // Calculate EMA helper
+  const calculateEMA = (data, period) => {
+    if (data.length < period) return [];
+    let emaData = [];
+    let k = 2 / (period + 1);
+    
+    // Simple moving average for the first point
+    let sum = 0;
+    for (let i = 0; i < period; i++) sum += data[i].close;
+    let ema = sum / period;
+    
+    // Fill initial nulls
+    for (let i = 0; i < period - 1; i++) {
+        // Option to just not plot, but we must align times. 
+        // We will just not include them in the array, lightweight charts handles missing data gaps gracefully.
+    }
+    emaData.push({ time: data[period - 1].time, value: ema });
+    
+    // Calculate exponential moving average for the rest
+    for (let i = period; i < data.length; i++) {
+        ema = (data[i].close * k) + (ema * (1 - k));
+        emaData.push({ time: data[i].time, value: ema });
+    }
+    return emaData;
+  };
+
+  const ema9Data = calculateEMA(uniqueData, 9);
+  const ema21Data = calculateEMA(uniqueData, 21);
+
   // Clear existing price lines
   if (lwSeries.priceLines) {
      lwSeries.priceLines.forEach(pl => lwSeries.removePriceLine(pl));
@@ -812,6 +857,8 @@ function renderChart() {
   inactiveSeries.setData([]);
   activeSeries.setData(uniqueData);
   if (lwVolumeSeries) lwVolumeSeries.setData(volumeData);
+  if (lwEma9) lwEma9.setData(ema9Data);
+  if (lwEma21) lwEma21.setData(ema21Data);
 
   const existingLots = savedPortfolio.filter(p => p.symbol === activeSymbol);
   existingLots.forEach(lot => {
@@ -1067,13 +1114,15 @@ function bindControls() {
       setActiveButtons(els.railTabs, "tab", activeTab);
       
       els.watchlist.classList.add("hidden");
-      els.historyList.classList.add("hidden");
+      if (els.historyTab) els.historyTab.classList.add("hidden");
       els.portfolioList.classList.add("hidden");
       
-      const target = activeTab === "watchlist" ? els.watchlist : activeTab === "portfolio" ? els.portfolioList : els.historyList;
-      target.classList.remove("hidden", "fade-in");
-      void target.offsetWidth; // force reflow for animation
-      target.classList.add("fade-in");
+      const target = activeTab === "watchlist" ? els.watchlist : activeTab === "portfolio" ? els.portfolioList : els.historyTab;
+      if (target) {
+        target.classList.remove("hidden", "fade-in");
+        void target.offsetWidth; // force reflow for animation
+        target.classList.add("fade-in");
+      }
       
       if (activeTab === "watchlist") {
         renderWatchlist();

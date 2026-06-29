@@ -668,14 +668,21 @@ h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bot
 .book-row-bg {
   position: absolute;
   top: 0;
-  left: 0;
   bottom: 0;
-  opacity: 0.15;
+  opacity: 0.45;
   z-index: 0;
-  transition: width 0.2s ease;
+  transition: width 0.1s ease-in-out;
 }
-.book-row.positive .book-row-bg { background: var(--green); }
-.book-row.negative .book-row-bg { background: var(--red); }
+.book-row.positive .book-row-bg { 
+  right: 0; 
+  left: auto; 
+  background: linear-gradient(270deg, rgba(46,255,136,1) 0%, rgba(46,255,136,0) 100%); 
+}
+.book-row.negative .book-row-bg { 
+  left: 0; 
+  right: auto; 
+  background: linear-gradient(90deg, rgba(255,76,86,1) 0%, rgba(255,76,86,0) 100%); 
+}
 
 .clickable-ticker {
   cursor: pointer;
