@@ -39,6 +39,18 @@
           <div id="watchlist" class="watchlist loading">Loading symbols...</div>
           <div id="history-list" class="watchlist hidden"></div>
           <div id="portfolio-list" class="watchlist hidden"></div>
+          
+          <div id="wallet-panel" class="wallet-panel" style="padding: 16px; border-top: 1px solid var(--line); margin-top: auto; flex-shrink: 0;">
+            <p class="eyebrow" style="margin-bottom: 8px;">Paper Wallet</p>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="font-size: 11px; color: var(--muted);">Balance</span>
+              <strong id="wallet-balance" style="font-size: 14px; cursor: pointer;" onclick="editWalletBalance()">$100,000.00</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 11px; color: var(--muted);">Total P&L</span>
+              <strong id="wallet-pnl" style="font-size: 12px;" class="neutral">0.00%</strong>
+            </div>
+          </div>
         </aside>
 
         <section class="focus-panel" aria-label="Selected symbol detail">
@@ -96,6 +108,10 @@
             <section>
               <h3>Momentum</h3>
               <div id="movers-list" class="movers-list"></div>
+            </section>
+            <section>
+              <h3>Technical Indicators</h3>
+              <div id="signals-list" class="signals-list"></div>
             </section>
           </div>
         </section>

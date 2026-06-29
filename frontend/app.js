@@ -34,6 +34,22 @@ let savedPortfolio = (() => {
     return [];
   }
 })();
+let walletCash = (() => {
+  try {
+    const cash = localStorage.getItem("trader-desk-wallet-cash");
+    return cash ? parseFloat(cash) : 100000;
+  } catch (e) {
+    return 100000;
+  }
+})();
+let startingBalance = (() => {
+  try {
+    const start = localStorage.getItem("trader-desk-wallet-start");
+    return start ? parseFloat(start) : 100000;
+  } catch (e) {
+    return 100000;
+  }
+})();
 let tradeHistory = (() => {
   try {
     const data = JSON.parse(localStorage.getItem("trader-desk-trade-history"));
@@ -116,7 +132,52 @@ function updateStorage() {
   localStorage.setItem("trader-desk-history", JSON.stringify(savedHistory));
   localStorage.setItem("trader-desk-portfolio", JSON.stringify(savedPortfolio));
   localStorage.setItem("trader-desk-trade-history", JSON.stringify(tradeHistory));
+  localStorage.setItem("trader-desk-wallet-cash", walletCash.toString());
+  localStorage.setItem("trader-desk-wallet-start", startingBalance.toString());
 }
+
+function renderWallet() {
+  const elsBalance = document.getElementById("wallet-balance");
+  const elsPnl = document.getElementById("wallet-pnl");
+  if (!elsBalance || !elsPnl) return;
+  
+  let portfolioValue = 0;
+  savedPortfolio.forEach(pos => {
+    const q = quotes.find(quote => quote.symbol === pos.symbol);
+    const currentPrice = q ? q.price : pos.avgPrice;
+    portfolioValue += (pos.qty * currentPrice);
+  });
+  
+  const totalValue = walletCash + portfolioValue;
+  const pnl = totalValue - startingBalance;
+  const pnlPercent = (pnl / startingBalance) * 100;
+  
+  elsBalance.textContent = `$${formatPrice(walletCash)}`;
+  elsPnl.textContent = `${pnl > 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`;
+  elsPnl.className = toneClass(pnl);
+}
+
+window.editWalletBalance = function() {
+  const newBalance = prompt("Enter new starting balance ($):", startingBalance);
+  if (newBalance !== null && !isNaN(parseFloat(newBalance))) {
+    const diff = parseFloat(newBalance) - startingBalance;
+    startingBalance = parseFloat(newBalance);
+    walletCash += diff; // Adjust cash by the difference
+    updateStorage();
+    renderWallet();
+  }
+};
+
+window.setActiveButtons = function(container, dataAttr, matchVal) {
+  const btns = document.querySelectorAll(`${container} button`);
+  btns.forEach(btn => {
+    if (btn.getAttribute(dataAttr) === matchVal) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+};
 
 window.toggleWatchlist = function (symbol) {
   if (savedWatchlist.includes(symbol)) {
@@ -268,39 +329,43 @@ function renderPortfolio() {
 }
 
 function renderHistory() {
-  if (tradeHistory.length === 0) {
-    els.historyList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No trade history.</div>`;
+  const filteredHistory = savedHistory.filter(sym => !savedWatchlist.includes(sym));
+  
+  if (filteredHistory.length === 0) {
+    els.historyList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No recent history.</div>`;
     return;
   }
   
-  els.historyList.innerHTML = tradeHistory.map(trade => {
-    const isBuy = trade.type === "BUY";
-    const pnlDisplay = !isBuy && trade.pnl !== undefined 
-      ? `<span class="${toneClass(trade.pnl)}">${trade.pnl > 0 ? "+" : ""}$${formatPrice(Math.abs(trade.pnl))}</span>` 
-      : "";
-      
+  els.historyList.innerHTML = filteredHistory.map(sym => {
+    const q = quotes.find(quote => quote.symbol === sym);
+    const p = q ? q.price : "--";
+    const isActive = sym === activeSymbol ? "active" : "";
     return `
-      <div class="portfolio-item" style="cursor: default;">
-        <div class="port-row main">
-          <strong>
-            <span style="display:inline-block; padding:2px 4px; border-radius:3px; font-size:9px; background:${isBuy ? 'var(--green)' : 'var(--line)'}; color:${isBuy ? '#000' : 'var(--muted)'}; margin-right:6px;">${trade.type}</span>
-            ${trade.symbol}
-          </strong>
-          <b>@ $${formatPrice(trade.price)}</b>
+      <div class="watch-row ${isActive}" onclick="selectSymbol('${sym}')">
+        <div class="watch-left">
+          <strong>${sym}</strong>
         </div>
-        <div class="port-row meta">
-          <span>Qty: ${trade.qty} &bull; ${trade.timestamp}</span>
-          ${pnlDisplay}
+        <div class="watch-right">
+          <strong>${p !== "--" ? "$" + formatPrice(p) : "--"}</strong>
+          <button class="add-btn" onclick="event.stopPropagation(); toggleWatchlist('${sym}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
         </div>
       </div>
     `;
-  }).reverse().join("");
+  }).join("");
 }
 
 function executeTrade(symbol, side, qty, price, id = null) {
   const timestamp = new Date().toLocaleTimeString();
+  const tradeValue = qty * price;
   
   if (side === "buy") {
+    if (walletCash < tradeValue) {
+      alert("Not enough cash in wallet!");
+      return;
+    }
+    walletCash -= tradeValue;
     // Determine the next color based on the number of existing lots for this symbol
     const existingLots = savedPortfolio.filter(p => p.symbol === symbol).length;
     const color = LOT_COLORS[existingLots % LOT_COLORS.length];
@@ -310,6 +375,7 @@ function executeTrade(symbol, side, qty, price, id = null) {
     tradeHistory.push({ type: "BUY", symbol, qty, price, timestamp });
   } else if (side === "sell") {
     let pnl = 0;
+    walletCash += tradeValue; // Add full sale amount to cash
     if (id) {
       const existingIdx = savedPortfolio.findIndex(p => p.id === id);
       if (existingIdx > -1) {
@@ -341,9 +407,10 @@ function executeTrade(symbol, side, qty, price, id = null) {
     tradeHistory.push({ type: "SELL", symbol, qty, price, timestamp, pnl });
   }
   updateStorage();
-  if (activeTab === "portfolio") renderPortfolio();
-  if (activeTab === "history") renderHistory();
-  renderChart();
+  renderPortfolio();
+  renderHistory();
+  renderChart(); // Redraw chart to update order markers
+  renderWallet();
 }
 
 function renderTicker() {
@@ -353,6 +420,39 @@ function renderTicker() {
       return `<span class="${toneClass(quote.change)}">${quote.symbol} ${formatPrice(quote.price)} ${sign}${(quote.changePercent || 0).toFixed(2)}%</span>`;
     })
     .join("");
+}
+
+function renderSignals() {
+  const elsSignals = document.getElementById("signals-list");
+  if (!elsSignals) return;
+  
+  const activeSignals = detail?.signals || signals.find((item) => item.symbol === activeSymbol);
+  
+  if (!activeSignals) {
+    elsSignals.innerHTML = `<div class="signal-row neutral"><span>Waiting signal data</span></div>`;
+    return;
+  }
+  
+  const dirClass = activeSignals.action === "Buy" ? "positive" : activeSignals.action === "Sell" ? "negative" : "neutral";
+  
+  elsSignals.innerHTML = `
+    <div class="signal-tile ${dirClass}">
+      <span>Action</span><strong>${activeSignals.action.toUpperCase()} ${activeSignals.confidence}%</strong>
+    </div>
+    <div class="signal-row"><span>Target</span><strong>${activeSignals.targetPrice ? formatPrice(activeSignals.targetPrice) : 'N/A'}</strong></div>
+    <div class="signal-row"><span>EMA 9 / 21</span><strong>${formatPrice(activeSignals.ema9)} / ${formatPrice(activeSignals.ema21)}</strong></div>
+    <div class="signal-row"><span>RSI 14</span><strong>${formatPrice(activeSignals.rsi14)}</strong></div>
+    <div class="signal-row"><span>VWAP</span><strong>${formatPrice(activeSignals.vwap)}</strong></div>
+    <div class="signal-row"><span>Realized vol</span><strong>${formatPrice(activeSignals.realizedVolatilityPct)}%</strong></div>
+  `;
+  
+  if (els.headerSignal) {
+    els.headerSignal.textContent = activeSignals.action.toUpperCase();
+    els.headerSignal.className = dirClass === "positive" ? "bg-green text-black" : dirClass === "negative" ? "bg-red text-black" : "bg-panel text-white";
+    els.headerSignal.style.backgroundColor = dirClass === "positive" ? "var(--green)" : dirClass === "negative" ? "var(--red)" : "var(--panel)";
+    els.headerSignal.style.color = dirClass !== "neutral" ? "var(--bg)" : "inherit";
+    if (els.headerTarget) els.headerTarget.textContent = activeSignals.targetPrice ? `Target: ${formatPrice(activeSignals.targetPrice)}` : '';
+  }
 }
 
 function renderPulse() {
@@ -415,6 +515,7 @@ function renderFocus() {
   els.pinBtn.className = isPinned ? "pin-btn active" : "pin-btn";
   updateChartCaption();
   renderChart();
+  renderSignals();
 }
 
 function updateChartCaption(extra = "") {
@@ -753,12 +854,13 @@ async function loadDesk() {
   let symbols = [];
   if (activeTab === "watchlist") symbols = savedWatchlist;
   else if (activeTab === "portfolio") symbols = Array.from(new Set(savedPortfolio.map(p => p.symbol)));
-  else if (activeTab === "history") symbols = Array.from(new Set(tradeHistory.map(t => t.symbol)));
+  else if (activeTab === "history") symbols = savedHistory;
   
   if (!symbols.length) {
     quotes = [];
     if (activeTab === "watchlist") renderWatchlist();
     else if (activeTab === "portfolio") renderPortfolio();
+    else if (activeTab === "history") renderHistory();
     return;
   }
   
@@ -771,9 +873,12 @@ async function loadDesk() {
   
   if (activeTab === "watchlist") renderWatchlist();
   else if (activeTab === "portfolio") renderPortfolio();
+  else if (activeTab === "history") renderHistory();
   
   renderTicker();
   renderPulse();
+  renderSignals();
+  renderWallet();
 }
 
 async function loadCandles() {
