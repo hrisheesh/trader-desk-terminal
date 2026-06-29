@@ -80,6 +80,7 @@ let lastCandlePayload = null;
 let activeFeed = null;
 let isRealtime = false;
 let liveCandleUpdates = new Map();
+let emaVisible = true;
 let pendingFocusRender = false;
 let refreshTimer = null;
 let flowTimer = null;
@@ -137,6 +138,7 @@ const els = {
   lightningSell: document.querySelector("#btn-lightning-sell"),
   lightningFlatten: document.querySelector("#btn-lightning-flatten"),
   posTracker: document.querySelector("#pos-tracker"),
+  btnToggleEma: document.querySelector("#btn-toggle-ema"),
 };
 
 let lwHistoryChart = null;
@@ -751,12 +753,14 @@ function renderChart() {
       color: '#f9a826', // Orange
       lineWidth: 1,
       lineStyle: LightweightCharts.LineStyle.Solid,
+      visible: emaVisible,
     });
 
     lwEma21 = lwChart.addLineSeries({
       color: '#00b4d8', // Electric Blue
       lineWidth: 2,
       lineStyle: LightweightCharts.LineStyle.Solid,
+      visible: emaVisible,
     });
 
     lwVolumeSeries = lwChart.addHistogramSeries({
@@ -1108,6 +1112,17 @@ function bindControls() {
       renderChart();
     });
   });
+  
+  if (els.btnToggleEma) {
+    els.btnToggleEma.addEventListener("click", () => {
+      emaVisible = !emaVisible;
+      els.btnToggleEma.classList.toggle("active", emaVisible);
+      els.btnToggleEma.textContent = emaVisible ? "EMA On" : "EMA Off";
+      if (lwEma9) lwEma9.applyOptions({ visible: emaVisible });
+      if (lwEma21) lwEma21.applyOptions({ visible: emaVisible });
+    });
+  }
+
   els.railTabs.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", () => {
       activeTab = button.dataset.tab;
