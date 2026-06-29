@@ -652,11 +652,11 @@ function renderChart() {
   existingLots.forEach((lot, i) => {
     const posY = scale.y(lot.avgPrice);
     if (posY >= plot.top && posY <= height - plot.bottom) {
-      // Stagger badges horizontally so they don't completely overlap if at similar prices
-      const badgeX = plot.left + 5 + (i * 65);
+      // Keep all badges on the left edge as requested
+      const badgeX = plot.left + 5;
       positionLines += `
         <line x1="${plot.left}" x2="${plotRight}" y1="${posY}" y2="${posY}" stroke="${lot.color || 'var(--cyan)'}" stroke-width="1.5" stroke-dasharray="4 4" class="position-line"></line>
-        <g class="position-badge-group" onclick="window.togglePositionTooltip('${lot.id}')">
+        <g class="position-badge-group" onclick="window.togglePositionTooltip('${lot.id}', event)">
           <rect x="${badgeX}" y="${posY - 10}" width="55" height="20" fill="var(--bg)" stroke="${lot.color || 'var(--cyan)'}" rx="4" class="position-badge"></rect>
           <text x="${badgeX + 27.5}" y="${posY + 4}" fill="${lot.color || 'var(--cyan)'}" font-size="11" text-anchor="middle" font-weight="bold">$${formatPrice(lot.avgPrice)}</text>
         </g>
@@ -679,7 +679,7 @@ function renderChart() {
   `;
 }
 
-window.togglePositionTooltip = function(id) {
+window.togglePositionTooltip = function(id, event) {
   const existing = savedPortfolio.find(p => p.id === id);
   if (!existing) return;
   const q = quotes.find(quote => quote.symbol === activeSymbol);
@@ -697,8 +697,25 @@ window.togglePositionTooltip = function(id) {
   // Store the active lot ID on the sell button for reference
   els.ptSellBtn.dataset.lotId = id;
   
-  els.positionTooltip.classList.toggle("hidden");
+  if (event) {
+    const chartWrap = document.querySelector('.chart-wrap');
+    const wrapRect = chartWrap.getBoundingClientRect();
+    const x = event.clientX - wrapRect.left + 10;
+    const y = event.clientY - wrapRect.top - 20;
+    els.positionTooltip.style.left = `${x}px`;
+    els.positionTooltip.style.top = `${y}px`;
+    els.positionTooltip.style.transform = `none`;
+  }
+  
+  els.positionTooltip.classList.remove("hidden");
 };
+
+// Also hide tooltip if clicking outside
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#position-tooltip") && !e.target.closest(".position-badge-group")) {
+    els.positionTooltip.classList.add("hidden");
+  }
+});
 
 function scheduleFocusRender() {
   if (pendingFocusRender) return;
