@@ -1,0 +1,256 @@
+class TraderBot {
+  constructor(mode) {
+    this.mode = mode;
+  }
+  
+  getTempo() {
+    if (this.mode === "calm") return { globalCooldown: 12000, symbolCooldown: 26000, firstEntryScale: 0.22, deploymentCurve: 1.7 };
+    if (this.mode === "aggressive") return { globalCooldown: 1800, symbolCooldown: 3500, firstEntryScale: 0.72, deploymentCurve: 0.5 };
+    return { globalCooldown: 5000, symbolCooldown: 9000, firstEntryScale: 0.46, deploymentCurve: 1.02 };
+  }
+
+  recentPerformance() {
+    const trades = botState.modes[this.mode].trades.filter(trade => trade.side === "SELL").slice(0, 12);
+    if (!trades.length) return { realizedBias: 0, winRate: 0.5 };
+    const wins = trades.filter(trade => Number(trade.pnl || 0) > 0).length;
+    const pnl = trades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
+    const capital = Math.max(1, botCapital(this.mode));
+    return { realizedBias: clamp((pnl / capital) * 100, -10, 10), winRate: wins / trades.length };
+  }
+
+  strategyProfile(snapshot) {
+    const def = BOT_MODES[this.mode];
+    const timing = botRunTiming(this.mode);
+    const drawdownPct = snapshot.capital ? Math.max(0, ((snapshot.capital - snapshot.totalValue) / snapshot.capital) * 100) : 0;
+    const performance = this.recentPerformance();
+    const pressure = clamp(drawdownPct / 8, 0, 1);
+    const learningBias = ((performance.winRate - 0.5) * 0.12) + (performance.realizedBias / 80);
+    const lateCaution = timing.phase === "exit" ? 0.18 : timing.phase === "manage" ? 0.06 : 0;
+    const tempo = this.getTempo();
+    const deploymentAllowance = timing.phase === "observe" || timing.phase === "exit"
+    ? (timing.phase === "exit" ? 0 : clamp(tempo.firstEntryScale * 0.45, 0.08, 0.32))
+    : clamp(tempo.firstEntryScale + Math.pow(timing.activeProgress, tempo.deploymentCurve) * (1 - tempo.firstEntryScale), tempo.firstEntryScale, 1);
+    
+    return {
+      ...def,
+      mode: this.mode,
+      timing,
+      drawdownPct,
+      performance,
+      deploymentAllowance,
+      convictionDemand: clamp(def.convictionBias + pressure * 0.14 - learningBias + lateCaution, 0.24, 0.9),
+      riskTolerance: clamp(def.riskAppetite - pressure * (0.36 - def.riskAppetite * 0.16) + learningBias - lateCaution, 0.14, 0.92),
+      patienceLevel: clamp(def.patience + pressure * 0.18 + lateCaution - timing.activeProgress * def.riskAppetite * 0.08, 0.14, 0.94),
+    };
+  }
+
+  observationNeed(profile) {
+    const timingPenalty = profile.timing.phase === "observe" && this.mode !== "aggressive" ? 1 : 0;
+    const modeAdjustment = this.mode === "aggressive" ? -1.6 : this.mode === "calm" ? 1.2 : 0;
+    return Math.round(clamp(3 + profile.patienceLevel * 4 + profile.convictionDemand * 1.2 - profile.riskTolerance + modeAdjustment, this.mode === "aggressive" ? 2 : 3, this.mode === "calm" ? 8 : 6) + timingPenalty);
+  }
+
+  minimumEdge(profile, context, snapshot) {
+    const exposurePct = snapshot.capital ? snapshot.openValue / snapshot.capital : 0;
+    const uncertainty = context.noisePct * 1.35 + Math.max(0, -context.agreement) * 8 + exposurePct * 7;
+    const performanceAdjustment = profile.performance.realizedBias * 0.22 + (profile.performance.winRate - 0.5) * 5;
+    const phaseAdjustment = profile.timing.phase === "observe" ? (this.mode === "aggressive" ? 2 : this.mode === "calm" ? 10 : 6) : profile.timing.phase === "exit" ? 100 : profile.timing.phase === "manage" ? 2 : 0;
+    const personalityAdjustment = this.mode === "aggressive" ? -5 : this.mode === "calm" ? 5 : 0;
+    return clamp(5 + profile.patienceLevel * 12 + profile.convictionDemand * 14 - profile.riskTolerance * 8 + uncertainty + phaseAdjustment + personalityAdjustment - performanceAdjustment, 3, 120);
+  }
+
+  buildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0, meta = {}) {
+    const volatility = Math.max(0.25, context.volatilityPct);
+    const stopBase = (this.mode === "calm" ? 0.14 : this.mode === "aggressive" ? 0.24 : 0.18) + volatility * (0.16 + profile.riskTolerance * 0.18);
+    const targetBase = (this.mode === "calm" ? 0.08 : this.mode === "aggressive" ? 0.18 : 0.12) + volatility * (0.08 + profile.riskTolerance * 0.16) + Math.max(0, confidence - 64) * 0.012;
+    return {
+      action,
+      symbol: context.symbol,
+      price: context.price,
+      score: Math.round(confidence),
+      confidence: clamp(confidence, 0, 100),
+      risk: clamp(risk, 0, 100),
+      style: profile.label,
+      phase: profile.timing.phase,
+      patience: profile.patienceLevel,
+      conviction: profile.convictionDemand,
+      notional,
+      sellFraction,
+      stopLossPct: clamp(stopBase, this.mode === "calm" ? 0.16 : 0.22, this.mode === "aggressive" ? 2.4 : 1.8),
+      takeProfitPct: clamp(targetBase, this.mode === "calm" ? 0.08 : 0.12, this.mode === "calm" ? 1.3 : this.mode === "aggressive" ? 2.4 : 1.8),
+      ...meta,
+    };
+  }
+
+  decisionReason(decision, context) {
+    const actionText = decision.action === "BUY" ? `buy $${formatPrice(decision.notional || 0)}` : decision.action.toLowerCase();
+    const edgeText = Number.isFinite(decision.edge) ? `; edge ${decision.edge.toFixed(1)}/${decision.requiredEdge.toFixed(1)}` : "";
+    const exitText = decision.exitCause ? `; ${decision.exitCause}` : "";
+    const blockText = decision.blockedBy ? `; blocked by ${decision.blockedBy}` : "";
+    return `${actionText}; ${decision.style} ${decision.phase}; confidence ${Math.round(decision.confidence)}; risk ${Math.round(decision.risk)}${edgeText}${exitText}${blockText}; samples ${context.samples}; pnl ${context.pnlPct >= 0 ? "+" : ""}${context.pnlPct.toFixed(2)}%; momentum ${context.shortMomentumPct >= 0 ? "+" : ""}${context.shortMomentumPct.toFixed(2)}%; noise ${context.noisePct.toFixed(2)}%; ${context.signalAction} signal ${context.signalConfidence}%`;
+  }
+
+  tradeCooldownReady(symbol, profile) {
+    const state = botState.modes[this.mode];
+    const tempo = this.getTempo();
+    const now = Date.now();
+    const globalReady = !state.lastActionAt || now - state.lastActionAt >= tempo.globalCooldown;
+    const symbolReady = !state.lastTradeAt[symbol] || now - state.lastTradeAt[symbol] >= tempo.symbolCooldown;
+    return globalReady && symbolReady;
+  }
+
+  pacedNotional(context, profile, snapshot, edge, requiredEdge) {
+    const timing = profile.timing;
+    if (timing.phase === "exit") return 0;
+    if (!this.tradeCooldownReady(context.symbol, profile)) return 0;
+    const conviction = clamp(
+      (edge - requiredEdge + (this.mode === "aggressive" ? 26 : 18)) / (this.mode === "aggressive" ? 42 : this.mode === "calm" ? 76 : 60),
+      0,
+      this.mode === "aggressive" ? 1.22 : 1.08,
+    );
+    const exposureCap = snapshot.capital * profile.maxExposure * profile.deploymentAllowance;
+    const currentValue = botHeldQuantity(this.mode, context.symbol) * context.price;
+    const positionCap = snapshot.capital * profile.maxPosition * profile.deploymentAllowance;
+    const exposureRoom = Math.max(0, exposureCap - snapshot.openValue);
+    const positionRoom = Math.max(0, positionCap - currentValue);
+    const reservePct = this.mode === "calm" ? 0.24 + profile.drawdownPct / 52 : this.mode === "aggressive" ? 0.015 + profile.drawdownPct / 150 : 0.1 + profile.drawdownPct / 88;
+    const spendable = Math.max(0, snapshot.cash - snapshot.capital * reservePct);
+    const phaseSlice = snapshot.capital * profile.maxPosition * conviction * (this.mode === "aggressive" ? 0.82 : this.mode === "calm" ? 0.34 : 0.56);
+    return Math.min(spendable, exposureRoom, positionRoom, phaseSlice);
+  }
+
+  brainFor(context, profile, snapshot) {
+    const ready = context.samples >= this.observationNeed(profile);
+    const acceleration = context.shortMomentumPct - context.noisePct * (this.mode === "aggressive" ? 0.08 : this.mode === "calm" ? 0.28 : 0.18);
+    const reversalPenalty = Math.max(0, -context.shortMomentumPct) * (this.mode === "calm" ? 10 : this.mode === "aggressive" ? 4.5 : 6.5);
+    const personalityLift = this.mode === "aggressive" ? 7 : this.mode === "calm" ? -5 : 0;
+    const liveTape = context.shortMomentumPct - context.noisePct * (this.mode === "aggressive" ? 0.04 : this.mode === "calm" ? 0.22 : 0.12);
+    const tapePenalty = liveTape < 0 ? Math.abs(liveTape) * (this.mode === "aggressive" ? 18 : this.mode === "calm" ? 42 : 28) : 0;
+    const confidence = clamp(
+      40 + personalityLift
+      + context.trendQuality * (this.mode === "aggressive" ? 1.28 : this.mode === "calm" ? 0.68 : 0.94)
+      + context.agreement * (this.mode === "calm" ? 20 : this.mode === "aggressive" ? 10 : 14)
+      + Math.max(0, acceleration) * (this.mode === "aggressive" ? 18 : this.mode === "calm" ? 5 : 9)
+      + profile.performance.realizedBias * 0.7
+      - profile.convictionDemand * (this.mode === "calm" ? 9 : 3.5)
+      - tapePenalty,
+      0,
+      100,
+    );
+    const risk = clamp(
+      context.riskLoad * (this.mode === "calm" ? 1.2 : this.mode === "aggressive" ? 0.58 : 0.86)
+      + reversalPenalty
+      + profile.drawdownPct * (this.mode === "aggressive" ? 1.65 : 1)
+      + Math.max(0, -context.agreement) * (this.mode === "calm" ? 7 : 4),
+      0,
+      100,
+    );
+    const edge = confidence - risk * (this.mode === "aggressive" ? 0.2 : this.mode === "calm" ? 0.5 : 0.34) - profile.patienceLevel * 4.5 - profile.convictionDemand * 3.5;
+    const requiredEdge = this.minimumEdge(profile, context, snapshot);
+    const meta = { edge, requiredEdge, tape: liveTape };
+    const holdDecision = this.buildDecision("HOLD", context, profile, confidence, risk, 0, 0, meta);
+
+    if (!ready) return this.buildDecision("WAIT", context, profile, confidence, risk, 0, 0, meta);
+
+    if (context.heldQty > 0) {
+      const heldMs = Date.now() - (context.openedAt || Date.now());
+      // Give trades some breathing room (e.g. at least 30s-120s)
+      const minHoldMs = this.mode === "calm" ? 120000 : this.mode === "aggressive" ? 30000 : 60000;
+      const thesisFailed = context.shortMomentumPct < -Math.max(0.04, context.noisePct * (this.mode === "aggressive" ? 0.18 : 0.28)) && context.agreement < (this.mode === "calm" ? 0.08 : -0.02);
+      const lateFailure = context.pnlPct < 0 && thesisFailed && heldMs >= minHoldMs;
+      // Realistic percentage target (1.0 = 1%)
+      const scalpTarget = this.mode === "calm" ? 0.75 : this.mode === "aggressive" ? 2.5 : 1.25;
+      const scalpFade = context.pnlPct >= scalpTarget && heldMs >= minHoldMs && context.shortMomentumPct < context.noisePct * (this.mode === "aggressive" ? 0.16 : 0.08);
+      // Realistic maximum hold times: 5, 15, and 30 minutes
+      const maxHoldMs = this.mode === "aggressive" ? 300000 : this.mode === "calm" ? 1800000 : 900000;
+      // Realistic PNL threshold to prevent a time stop
+      const timeStop = heldMs >= maxHoldMs && context.pnlPct < (this.mode === "aggressive" ? 0.5 : 0.25);
+      // Realistic soft loss thresholds
+      const softLoss = this.mode === "calm" ? -2.0 : this.mode === "aggressive" ? -5.0 : -3.5;
+      const profitEnough = context.pnlPct >= scalpTarget && (profile.timing.phase === "manage" || edge < requiredEdge + 3 || heldMs >= maxHoldMs * 0.55);
+
+      if (profile.timing.phase === "exit") {
+        const urgency = clamp(1 - (profile.timing.remainingMs / Math.max(1, profile.timing.exitMs)), 0, 1);
+        return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "window closing" });
+      }
+      
+      // Changed to fully EXIT position for these terminal states to prevent fractional selling loops
+      if (context.pnlPct <= -holdDecision.stopLossPct) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "stop loss" });
+      if (context.pnlPct <= softLoss && edge < requiredEdge) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "loss not recovering" });
+      if (lateFailure) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "thesis failed" });
+      if (profitEnough) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "scalp captured" });
+      if (context.pnlPct >= holdDecision.takeProfitPct && heldMs >= minHoldMs) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "target reached" });
+      if (scalpFade) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "scalp fade" });
+      if (timeStop) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "time stop" });
+      if (heldMs >= minHoldMs && context.pnlPct > 0.08 && context.shortMomentumPct < -context.noisePct * 0.12) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "momentum rolled" });
+      return holdDecision;
+    }
+
+    if (profile.timing.phase === "exit") return this.buildDecision("WATCH", context, profile, confidence, risk, 0, 0, meta);
+    
+    // Loosened entry filters so bots are not endlessly paralyzed
+    const entryTapeOk = liveTape > (this.mode === "aggressive" ? -0.05 : this.mode === "calm" ? 0 : -0.02);
+    const agreementOk = context.agreement >= (this.mode === "aggressive" ? -0.2 : this.mode === "calm" ? 0.2 : 0);
+    const roomOk = context.resistanceDistancePct >= (this.mode === "calm" ? 0.01 : 0.005) || context.shortMomentumPct > context.noisePct * 0.5;
+    if (!entryTapeOk || !agreementOk || !roomOk) return this.buildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk, 0, 0, { ...meta, blockedBy: "entry filter" });
+    const notional = this.pacedNotional(context, profile, snapshot, edge, requiredEdge);
+    if (notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge) return this.buildDecision("BUY", context, profile, confidence, risk, notional, 0, meta);
+    return this.buildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk, 0, 0, meta);
+  }
+
+  orderNotional(candidate, cash) {
+    const profile = this.strategyProfile(botPortfolioSnapshot(this.mode));
+    const currentValue = botHeldQuantity(this.mode, candidate.symbol) * candidate.price;
+    const positionRoom = Math.max(0, (botCapital(this.mode) * profile.maxPosition) - currentValue);
+    return Math.min(cash, positionRoom, Number(candidate.notional || 0));
+  }
+
+  runModeDecision(ranked) {
+    const state = botState.modes[this.mode];
+    state.rankings = ranked;
+    state.decisions += 1;
+    const snapshot = botPortfolioSnapshot(this.mode, ranked);
+    const profile = this.strategyProfile(snapshot);
+    const held = ranked.filter(item => botHeldQuantity(this.mode, item.symbol) > 0);
+    let auditRow = null;
+
+    for (const item of held) {
+      const decision = this.brainFor(item, profile, snapshot);
+      if ((decision.action === "EXIT" || decision.action === "REDUCE" || decision.action === "LOCK PROFIT") && item.heldQty > 0) {
+        const qty = item.heldQty * (decision.sellFraction || 1);
+        executeBotSell(this.mode, item, qty, this.decisionReason(decision, item));
+        state.lastActionAt = Date.now();
+        auditRow = { ...decision, action: "SELL", reason: this.decisionReason(decision, item) };
+        botAppendRunAudit(this.mode, auditRow, ranked);
+        return;
+      }
+    }
+
+    const openSymbols = new Set(held.map(item => item.symbol));
+    const candidates = ranked.filter(item => !openSymbols.has(item.symbol));
+    const decisions = candidates.map(item => ({ context: item, decision: this.brainFor(item, profile, snapshot) }));
+    const buy = decisions
+      .filter(item => item.decision.action === "BUY")
+      .sort((a, b) => (b.decision.confidence - b.decision.risk * 0.35) - (a.decision.confidence - a.decision.risk * 0.35))[0];
+
+    if (buy) {
+      const notional = this.orderNotional(buy.decision, snapshot.cash);
+      if (notional >= Math.max(0.25, snapshot.capital * 0.01)) {
+        executeBotBuy(this.mode, buy.context, notional, this.decisionReason({ ...buy.decision, notional }, buy.context));
+        state.lastActionAt = Date.now();
+        auditRow = { ...buy.decision, action: "BUY", notional, reason: this.decisionReason({ ...buy.decision, notional }, buy.context) };
+        botAppendRunAudit(this.mode, auditRow, ranked);
+        return;
+      }
+    }
+
+    const top = [...decisions, ...held.map(context => ({ context, decision: this.brainFor(context, profile, snapshot) }))]
+      .sort((a, b) => (b.decision.confidence - b.decision.risk * 0.25) - (a.decision.confidence - a.decision.risk * 0.25))[0];
+    if (top) {
+      const reason = this.decisionReason(top.decision, top.context);
+      logBotDecision(this.mode, { action: top.decision.action, symbol: top.context.symbol, score: top.decision.score, confidence: top.decision.confidence, risk: top.decision.risk, reason }, { key: `${profile.timing.phase}:${top.decision.action}:${top.context.symbol}:${state.decisions}`, throttleMs: 0 });
+      botAppendRunAudit(this.mode, { ...top.decision, reason }, ranked);
+    }
+  }
+}
+window.TraderBot = TraderBot;

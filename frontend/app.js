@@ -231,11 +231,11 @@ const BOT_MODES = {
     label: "Calm",
     capital: 100,
     philosophy: "protect capital, wait for confirmation, scale into quiet strength",
-    riskAppetite: 0.32,
-    patience: 0.82,
-    convictionBias: 0.68,
-    maxExposure: 0.62,
-    maxPosition: 0.26,
+    riskAppetite: 0.26,
+    patience: 0.86,
+    convictionBias: 0.72,
+    maxExposure: 0.46,
+    maxPosition: 0.18,
   },
   normal: {
     label: "Normal",
@@ -251,11 +251,11 @@ const BOT_MODES = {
     label: "Aggressive",
     capital: 100,
     philosophy: "hunt acceleration, rotate quickly, accept wider variance for upside",
-    riskAppetite: 0.78,
-    patience: 0.28,
-    convictionBias: 0.38,
-    maxExposure: 0.92,
-    maxPosition: 0.58,
+    riskAppetite: 0.9,
+    patience: 0.18,
+    convictionBias: 0.26,
+    maxExposure: 0.98,
+    maxPosition: 0.72,
   },
 };
 const defaultBotConfig = {
@@ -565,10 +565,16 @@ capital: Number(snap.capital || 0),
 };
 }
 
+function generateBotRunId() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `run_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
 function botStartRunRecord() {
 const symbols = botUniverseSymbols();
 const run = {
-id: `run-${Date.now()}`,
+id: generateBotRunId(),
 startedAt: new Date().toISOString(),
 endedAt: null,
 reason: null,
@@ -586,6 +592,7 @@ botRuns.unshift(run);
 botRuns = botRuns.slice(0, BOT_RUN_HISTORY_LIMIT);
 activeBotRun = run;
 botPersistRuns();
+botPersistRunFile(run);
 }
 
 function botAppendRunAudit(mode, row, ranked = null) {
@@ -612,6 +619,12 @@ reason: row.reason || "",
 });
 activeBotRun.audit[mode] = audit.slice(-BOT_RUN_AUDIT_LIMIT);
 botPersistRuns();
+
+const now = Date.now();
+if (!activeBotRun._lastPersist || now - activeBotRun._lastPersist > 2500) {
+  botPersistRunFile(activeBotRun);
+  activeBotRun._lastPersist = now;
+}
 }
 
 function botFinishRunRecord(reason) {
@@ -1393,9 +1406,9 @@ const durationMs = Math.max(1000, stopAt - startedAt);
 const elapsedMs = clamp(now - startedAt, 0, durationMs);
 const remainingMs = clamp(stopAt - now, 0, durationMs);
 const progress = durationMs ? elapsedMs / durationMs : 0;
-const modeSpeed = mode === "calm" ? 1.35 : mode === "aggressive" ? 0.62 : 1;
-const observeMs = clamp(durationMs * (0.07 * modeSpeed), mode === "aggressive" ? 4000 : mode === "calm" ? 8000 : 6000, mode === "calm" ? 25000 : mode === "aggressive" ? 10000 : 18000);
-const exitMs = clamp(durationMs * (mode === "calm" ? 0.18 : mode === "aggressive" ? 0.12 : 0.15), mode === "aggressive" ? 9000 : 12000, 45000);
+const modeSpeed = mode === "calm" ? 1.15 : mode === "aggressive" ? 0.34 : 0.72;
+const observeMs = clamp(durationMs * (0.045 * modeSpeed), mode === "aggressive" ? 1500 : mode === "calm" ? 3500 : 2500, mode === "calm" ? 12000 : mode === "aggressive" ? 4500 : 8000);
+const exitMs = clamp(durationMs * (mode === "calm" ? 0.12 : mode === "aggressive" ? 0.08 : 0.1), mode === "aggressive" ? 6000 : 8000, 30000);
 let phase = "build";
 if (elapsedMs < observeMs) phase = "observe";
 else if (remainingMs <= exitMs) phase = "exit";
@@ -1405,201 +1418,11 @@ const activeProgress = clamp((elapsedMs - observeMs) / activeWindow, 0, 1);
 return { now, startedAt, stopAt, durationMs, elapsedMs, remainingMs, progress, activeProgress, observeMs, exitMs, phase };
 }
 
-function botModeTempo(mode) {
-if (mode === "calm") return { globalCooldown: 9000, symbolCooldown: 18000, firstEntryScale: 0.35, deploymentCurve: 1.55 };
-if (mode === "aggressive") return { globalCooldown: 3500, symbolCooldown: 7000, firstEntryScale: 0.62, deploymentCurve: 0.88 };
-return { globalCooldown: 6000, symbolCooldown: 11000, firstEntryScale: 0.48, deploymentCurve: 1.18 };
-}
-
-function enhancedBotRecentPerformance(mode) {
-const trades = botState.modes[mode].trades.filter(trade => trade.side === "SELL").slice(0, 12);
-if (!trades.length) return { realizedBias: 0, winRate: 0.5 };
-const wins = trades.filter(trade => Number(trade.pnl || 0) > 0).length;
-const pnl = trades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
-const capital = Math.max(1, botCapital(mode));
-return { realizedBias: clamp((pnl / capital) * 100, -10, 10), winRate: wins / trades.length };
-}
-
-function enhancedBotStrategyProfile(mode, snapshot) {
-const def = BOT_MODES[mode];
-const timing = botRunTiming(mode);
-const drawdownPct = snapshot.capital ? Math.max(0, ((snapshot.capital - snapshot.totalValue) / snapshot.capital) * 100) : 0;
-const performance = enhancedBotRecentPerformance(mode);
-const pressure = clamp(drawdownPct / 8, 0, 1);
-const learningBias = ((performance.winRate - 0.5) * 0.12) + (performance.realizedBias / 80);
-const lateCaution = timing.phase === "exit" ? 0.18 : timing.phase === "manage" ? 0.06 : 0;
-const deploymentAllowance = timing.phase === "observe" || timing.phase === "exit"
-? 0
-: clamp(Math.pow(timing.activeProgress, botModeTempo(mode).deploymentCurve), 0, 1);
-return {
-...def,
-mode,
-timing,
-drawdownPct,
-performance,
-deploymentAllowance,
-convictionDemand: clamp(def.convictionBias + pressure * 0.14 - learningBias + lateCaution, 0.24, 0.9),
-riskTolerance: clamp(def.riskAppetite - pressure * (0.36 - def.riskAppetite * 0.16) + learningBias - lateCaution, 0.14, 0.92),
-patienceLevel: clamp(def.patience + pressure * 0.18 + lateCaution - timing.activeProgress * def.riskAppetite * 0.08, 0.14, 0.94),
+const tradingBots = {
+  calm: new CalmBot(),
+  normal: new NormalBot(),
+  aggressive: new AggressiveBot()
 };
-}
-
-function enhancedBotObservationNeed(profile) {
-const timingPenalty = profile.timing.phase === "observe" ? 2 : 0;
-return Math.round(clamp(3 + profile.patienceLevel * 4 + profile.convictionDemand * 1.2 - profile.riskTolerance, 3, 8) + timingPenalty);
-}
-
-function enhancedBotMinimumEdge(profile, context, snapshot) {
-const exposurePct = snapshot.capital ? snapshot.openValue / snapshot.capital : 0;
-const uncertainty = context.noisePct * 1.35 + Math.max(0, -context.agreement) * 8 + exposurePct * 7;
-const performanceAdjustment = profile.performance.realizedBias * 0.22 + (profile.performance.winRate - 0.5) * 5;
-const phaseAdjustment = profile.timing.phase === "observe" ? 14 : profile.timing.phase === "exit" ? 100 : profile.timing.phase === "manage" ? 4 : 0;
-return clamp(5 + profile.patienceLevel * 12 + profile.convictionDemand * 14 - profile.riskTolerance * 8 + uncertainty + phaseAdjustment - performanceAdjustment, 4, 120);
-}
-
-function enhancedBotBuildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0) {
-const volatility = Math.max(0.25, context.volatilityPct);
-const stopBase = 0.32 + volatility * (0.62 + profile.riskTolerance);
-const targetBase = 0.45 + volatility * (1 + profile.riskTolerance) + Math.max(0, confidence - 62) * 0.032;
-return {
-action,
-symbol: context.symbol,
-price: context.price,
-score: Math.round(confidence),
-confidence: clamp(confidence, 0, 100),
-risk: clamp(risk, 0, 100),
-style: profile.label,
-phase: profile.timing.phase,
-patience: profile.patienceLevel,
-conviction: profile.convictionDemand,
-notional,
-sellFraction,
-stopLossPct: clamp(stopBase, 0.35, profile.mode === "aggressive" ? 7.5 : 5.5),
-takeProfitPct: clamp(targetBase, 0.45, profile.mode === "calm" ? 5.5 : 8.5),
-};
-}
-
-function enhancedBotDecisionReason(decision, context) {
-const actionText = decision.action === "BUY" ? `buy $${formatPrice(decision.notional || 0)}` : decision.action.toLowerCase();
-return `${actionText}; ${decision.style} ${decision.phase}; confidence ${Math.round(decision.confidence)}; risk ${Math.round(decision.risk)}; samples ${context.samples}; pnl ${context.pnlPct >= 0 ? "+" : ""}${context.pnlPct.toFixed(2)}%; momentum ${context.shortMomentumPct >= 0 ? "+" : ""}${context.shortMomentumPct.toFixed(2)}%; noise ${context.noisePct.toFixed(2)}%; ${context.signalAction} signal ${context.signalConfidence}%`;
-}
-
-function botTradeCooldownReady(mode, symbol, profile) {
-const state = botState.modes[mode];
-const tempo = botModeTempo(mode);
-const now = Date.now();
-const globalReady = !state.lastActionAt || now - state.lastActionAt >= tempo.globalCooldown;
-const symbolReady = !state.lastTradeAt[symbol] || now - state.lastTradeAt[symbol] >= tempo.symbolCooldown;
-return globalReady && symbolReady;
-}
-
-function botPacedNotional(mode, context, profile, snapshot, edge, requiredEdge) {
-if (profile.timing.phase === "observe" || profile.timing.phase === "exit") return 0;
-if (!botTradeCooldownReady(mode, context.symbol, profile)) return 0;
-const tempo = botModeTempo(mode);
-const conviction = clamp((edge - requiredEdge + 18) / (mode === "aggressive" ? 58 : mode === "calm" ? 72 : 64), 0, 1.08);
-const exposureCap = snapshot.capital * profile.maxExposure * profile.deploymentAllowance;
-const currentValue = botHeldQuantity(mode, context.symbol) * context.price;
-const positionCap = snapshot.capital * profile.maxPosition * (tempo.firstEntryScale + profile.deploymentAllowance * (1 - tempo.firstEntryScale));
-const exposureRoom = Math.max(0, exposureCap - snapshot.openValue);
-const positionRoom = Math.max(0, positionCap - currentValue);
-const reservePct = mode === "calm" ? 0.18 + profile.drawdownPct / 60 : mode === "aggressive" ? 0.035 + profile.drawdownPct / 130 : 0.09 + profile.drawdownPct / 90;
-const spendable = Math.max(0, snapshot.cash - snapshot.capital * reservePct);
-const phaseSlice = snapshot.capital * profile.maxPosition * conviction * (0.35 + profile.deploymentAllowance * 0.65);
-return Math.min(spendable, exposureRoom, positionRoom, phaseSlice);
-}
-
-function enhancedBotBrainFor(mode, context, profile, snapshot) {
-const ready = context.samples >= enhancedBotObservationNeed(profile);
-const acceleration = Math.max(0, context.shortMomentumPct - context.noisePct * (mode === "aggressive" ? 0.12 : 0.22));
-const defense = mode === "calm" ? 1.1 : mode === "aggressive" ? 0.68 : 0.86;
-const confidence = clamp(
-40 + context.trendQuality * (mode === "aggressive" ? 1.12 : mode === "calm" ? 0.76 : 0.94)
-+ context.agreement * (mode === "calm" ? 18 : 13)
-+ acceleration * (mode === "aggressive" ? 13 : 7)
-+ profile.performance.realizedBias * 0.8
-- profile.convictionDemand * (mode === "calm" ? 8 : 4),
-0,
-100,
-);
-const risk = clamp(context.riskLoad * defense + Math.max(0, -context.shortMomentumPct) * (mode === "calm" ? 9 : 5) + profile.drawdownPct * (mode === "aggressive" ? 1.4 : 0.9), 0, 100);
-const edge = confidence - risk * (mode === "aggressive" ? 0.26 : mode === "calm" ? 0.45 : 0.34) - profile.patienceLevel * 5 - profile.convictionDemand * 4;
-const requiredEdge = enhancedBotMinimumEdge(profile, context, snapshot);
-const holdDecision = enhancedBotBuildDecision("HOLD", context, profile, confidence, risk);
-
-if (!ready) return enhancedBotBuildDecision("WAIT", context, profile, confidence, risk);
-if (context.heldQty > 0) {
-const heldMs = Date.now() - (context.openedAt || Date.now());
-const minHoldMs = mode === "calm" ? 18000 : mode === "aggressive" ? 7000 : 11000;
-if (profile.timing.phase === "exit") {
-const urgency = clamp(1 - (profile.timing.remainingMs / Math.max(1, profile.timing.exitMs)), 0, 1);
-return enhancedBotBuildDecision(urgency > 0.62 ? "EXIT" : "REDUCE", context, profile, confidence, risk, 0, urgency > 0.62 ? 1 : clamp(0.35 + urgency * 0.45, 0.35, 0.8));
-}
-if (context.pnlPct <= -holdDecision.stopLossPct) return enhancedBotBuildDecision("EXIT", context, profile, confidence, risk, 0, 1);
-if (context.pnlPct >= holdDecision.takeProfitPct && heldMs >= minHoldMs) return enhancedBotBuildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, mode === "calm" ? 0.75 : 0.55);
-if (heldMs >= minHoldMs && context.pnlPct > 0.2 && context.shortMomentumPct < -context.noisePct * 0.22) return enhancedBotBuildDecision("REDUCE", context, profile, confidence, risk, 0, mode === "calm" ? 0.7 : 0.45);
-return holdDecision;
-}
-
-const notional = botPacedNotional(mode, context, profile, snapshot, edge, requiredEdge);
-if (notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge) return enhancedBotBuildDecision("BUY", context, profile, confidence, risk, notional);
-return enhancedBotBuildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk);
-}
-
-function enhancedBotOrderNotional(mode, candidate, cash) {
-const profile = enhancedBotStrategyProfile(mode, botPortfolioSnapshot(mode));
-const currentValue = botHeldQuantity(mode, candidate.symbol) * candidate.price;
-const positionRoom = Math.max(0, (botCapital(mode) * profile.maxPosition) - currentValue);
-return Math.min(cash, positionRoom, Number(candidate.notional || 0));
-}
-
-function enhancedRunBotModeDecision(mode, ranked) {
-const state = botState.modes[mode];
-state.rankings = ranked;
-state.decisions += 1;
-const snapshot = botPortfolioSnapshot(mode, ranked);
-const profile = enhancedBotStrategyProfile(mode, snapshot);
-const held = ranked.filter(item => botHeldQuantity(mode, item.symbol) > 0);
-let auditRow = null;
-
-for (const item of held) {
-const decision = enhancedBotBrainFor(mode, item, profile, snapshot);
-if ((decision.action === "EXIT" || decision.action === "REDUCE" || decision.action === "LOCK PROFIT") && item.heldQty > 0) {
-const qty = item.heldQty * (decision.sellFraction || 1);
-executeBotSell(mode, item, qty, enhancedBotDecisionReason(decision, item));
-state.lastActionAt = Date.now();
-auditRow = { ...decision, action: "SELL", reason: enhancedBotDecisionReason(decision, item) };
-botAppendRunAudit(mode, auditRow, ranked);
-return;
-}
-}
-
-const openSymbols = new Set(held.map(item => item.symbol));
-const candidates = ranked.filter(item => !openSymbols.has(item.symbol));
-const decisions = candidates.map(item => ({ context: item, decision: enhancedBotBrainFor(mode, item, profile, snapshot) }));
-const buy = decisions
-.filter(item => item.decision.action === "BUY")
-.sort((a, b) => (b.decision.confidence - b.decision.risk * 0.35) - (a.decision.confidence - a.decision.risk * 0.35))[0];
-
-if (buy) {
-const notional = enhancedBotOrderNotional(mode, buy.decision, snapshot.cash);
-if (notional >= Math.max(0.25, snapshot.capital * 0.01)) {
-executeBotBuy(mode, buy.context, notional, enhancedBotDecisionReason({ ...buy.decision, notional }, buy.context));
-state.lastActionAt = Date.now();
-auditRow = { ...buy.decision, action: "BUY", notional, reason: enhancedBotDecisionReason({ ...buy.decision, notional }, buy.context) };
-botAppendRunAudit(mode, auditRow, ranked);
-return;
-}
-}
-
-const top = [...decisions, ...held.map(context => ({ context, decision: enhancedBotBrainFor(mode, context, profile, snapshot) }))]
-.sort((a, b) => (b.decision.confidence - b.decision.risk * 0.25) - (a.decision.confidence - a.decision.risk * 0.25))[0];
-if (top) {
-const reason = enhancedBotDecisionReason(top.decision, top.context);
-logBotDecision(mode, { action: top.decision.action, symbol: top.context.symbol, score: top.decision.score, confidence: top.decision.confidence, risk: top.decision.risk, reason }, { key: `${profile.timing.phase}:${top.decision.action}:${top.context.symbol}:${state.decisions}`, throttleMs: 0 });
-botAppendRunAudit(mode, { ...top.decision, reason }, ranked);
-}
-}
 
 function enhancedRunBotDecision() {
 if (!botState.running) return;
@@ -1634,7 +1457,7 @@ return;
 }
 botModeIds().forEach(mode => {
 const ranked = botRankAnalyses(universe.map(quote => analyzeBotSymbol(mode, quote)));
-if (ranked.length) enhancedRunBotModeDecision(mode, ranked);
+if (ranked.length) tradingBots[mode].runModeDecision(ranked);
 });
 } catch (err) {
 botModeIds().forEach(mode => {

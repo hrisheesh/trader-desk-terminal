@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 SYMBOLS = ["NVDA", "AAPL", "TSLA", "MSFT", "BTC-USD", "ETH-USD", "SOXL", "SPY"]
 CRYPTO_SYMBOLS = {"BTC-USD", "ETH-USD"}
-BOT_RUN_LOG_DIR = Path(__file__).resolve().parent / "bot_runs"
+BOT_RUN_LOG_DIR = Path(__file__).resolve().parent.parent / "Logs"
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 COINBASE_BOOK_URL = "https://api.exchange.coinbase.com/products/{symbol}/book"
@@ -45,7 +45,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$",
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -508,10 +508,10 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/bot-runs")
 async def save_bot_run(payload: dict[str, Any]) -> dict[str, Any]:
-    run_id = str(payload.get("id") or f"run-{int(time.time())}")
+    run_id = str(payload.get("id") or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     safe_id = "".join(ch for ch in run_id if ch.isalnum() or ch in {"-", "_"}).strip("-_")
     if not safe_id:
-        safe_id = f"run-{int(time.time())}"
+        safe_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     BOT_RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
     json_path = BOT_RUN_LOG_DIR / f"{safe_id}.json"
