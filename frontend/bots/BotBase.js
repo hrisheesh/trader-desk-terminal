@@ -188,11 +188,6 @@ class TraderBot {
 
     if (profile.timing.phase === "exit") return this.buildDecision("WATCH", context, profile, confidence, risk, 0, 0, meta);
     
-    // Loosened entry filters so bots are not endlessly paralyzed
-    const entryTapeOk = liveTape > (this.mode === "aggressive" ? -0.05 : this.mode === "calm" ? 0 : -0.02);
-    const agreementOk = context.agreement >= (this.mode === "aggressive" ? -0.2 : this.mode === "calm" ? 0.2 : 0);
-    const roomOk = context.resistanceDistancePct >= (this.mode === "calm" ? 0.01 : 0.005) || context.shortMomentumPct > context.noisePct * 0.5;
-    if (!entryTapeOk || !agreementOk || !roomOk) return this.buildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk, 0, 0, { ...meta, blockedBy: "entry filter" });
     const notional = this.pacedNotional(context, profile, snapshot, edge, requiredEdge);
     if (notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge) return this.buildDecision("BUY", context, profile, confidence, risk, notional, 0, meta);
     return this.buildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk, 0, 0, meta);
