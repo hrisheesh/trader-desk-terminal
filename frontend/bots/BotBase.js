@@ -23,10 +23,10 @@ class TraderBot {
         zSellThreshold: 0.5,        
         signalBlockConfidence: 65,   
         signalBoostConfidence: 70,   
-        tradeSizePct: 0.015,         
-        maxPositionPct: 0.04,        
-        maxExposurePct: 0.25,        
-        reservePct: 0.50,            
+        tradeSizePct: 0.10,          // 10% per trade
+        maxPositionPct: 0.20,        // Max 20% in one coin
+        maxExposurePct: 0.50,        // Max 50% deployed
+        reservePct: 0.25,            // Keep 25% cash
         minHoldMs: 20000,            
         scratchTimeoutMs: 300000,    // 5 minutes
         maxHoldMs: 600000,           // 10 minutes
@@ -44,10 +44,10 @@ class TraderBot {
         zSellThreshold: 0.8,
         signalBlockConfidence: 70,
         signalBoostConfidence: 75,
-        tradeSizePct: 0.02,
-        maxPositionPct: 0.06,
-        maxExposurePct: 0.35,
-        reservePct: 0.40,
+        tradeSizePct: 0.20,          // 20% per trade
+        maxPositionPct: 0.35,        // Max 35% in one coin
+        maxExposurePct: 0.85,        // Max 85% deployed
+        reservePct: 0.10,            // Keep 10% cash
         minHoldMs: 15000,
         scratchTimeoutMs: 240000,    // 4 minutes
         maxHoldMs: 480000,           // 8 minutes
@@ -65,10 +65,10 @@ class TraderBot {
         zSellThreshold: 1.0,
         signalBlockConfidence: 75,    
         signalBoostConfidence: 60,
-        tradeSizePct: 0.025,          
-        maxPositionPct: 0.08,
-        maxExposurePct: 0.45,
-        reservePct: 0.30,
+        tradeSizePct: 0.35,          // 35% per trade (FULL DEGEN)
+        maxPositionPct: 0.50,        // Max 50% in one coin
+        maxExposurePct: 1.00,        // 100% deployed
+        reservePct: 0.00,            // Keep $0 in reserve
         minHoldMs: 10000,
         scratchTimeoutMs: 180000,    // 3 minutes
         maxHoldMs: 360000,           // 6 minutes
