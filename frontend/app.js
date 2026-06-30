@@ -218,7 +218,7 @@ let activeTicketSide = "buy";
 let ticketSizeMode = "amount";
 let ticketOrderType = "market";
 const BOT_CONFIG_KEY = "trader-desk-bot-config-v3";
-const BOT_STATE_KEY = "trader-desk-bot-state-v3";
+const BOT_STATE_KEY = "trader-desk-bot-state-v4";
 const BOT_RUNS_KEY = "trader-desk-bot-runs-v1";
 const BOT_PRICE_MEMORY_LIMIT = 28;
 const BOT_MIN_TRADE_NOTIONAL = 1;
@@ -229,7 +229,7 @@ const BOT_RUN_AUDIT_LIMIT = 12000;
 const BOT_MODES = {
   calm: {
     label: "Calm",
-    capital: 100,
+    capital: 10000,
     philosophy: "protect capital, wait for confirmation, scale into quiet strength",
     riskAppetite: 0.26,
     patience: 0.86,
@@ -244,7 +244,7 @@ const BOT_MODES = {
   },
   normal: {
     label: "Normal",
-    capital: 100,
+    capital: 10000,
     philosophy: "balance trend, signal agreement, and controlled opportunity cost",
     riskAppetite: 0.52,
     patience: 0.58,
@@ -259,7 +259,7 @@ const BOT_MODES = {
   },
   aggressive: {
     label: "Aggressive",
-    capital: 100,
+    capital: 10000,
     philosophy: "hunt acceleration, rotate quickly, accept wider variance for upside",
     riskAppetite: 0.9,
     patience: 0.18,
