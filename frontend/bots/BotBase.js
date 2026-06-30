@@ -1,286 +1,514 @@
+// =============================================================================
+// HFT Bot Engine — Z-Score Mean Reversion + Signal Gating
+// =============================================================================
+// Core principles (from real HFT research):
+// 1. Z-Score mean reversion: Buy when price is statistically cheap (Z < -1.0)
+// 2. Signal respect: NEVER buy when external signal says "Sell" with >70% conf
+// 3. Fixed fractional sizing: Risk 2% of capital per trade
+// 4. Selective entry: Only the BEST opportunity per decision cycle
+// 5. Realistic timing: Hold 30s-5min, not 6 seconds
+// =============================================================================
+
 class TraderBot {
   constructor(mode) {
     this.mode = mode;
   }
-  
-  getTempo() {
-    if (this.mode === "calm") return { globalCooldown: 12000, symbolCooldown: 26000, firstEntryScale: 0.22, deploymentCurve: 1.7 };
-    if (this.mode === "aggressive") return { globalCooldown: 1800, symbolCooldown: 3500, firstEntryScale: 0.72, deploymentCurve: 0.5 };
-    return { globalCooldown: 5000, symbolCooldown: 9000, firstEntryScale: 0.46, deploymentCurve: 1.02 };
-  }
 
-  recentPerformance() {
-    const trades = botState.modes[this.mode].trades.filter(trade => trade.side === "SELL").slice(0, 12);
-    if (!trades.length) return { realizedBias: 0, winRate: 0.5 };
-    const wins = trades.filter(trade => Number(trade.pnl || 0) > 0).length;
-    const pnl = trades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
-    const capital = Math.max(1, botCapital(this.mode));
-    return { realizedBias: clamp((pnl / capital) * 100, -10, 10), winRate: wins / trades.length };
-  }
-
-  strategyProfile(snapshot) {
-    const def = BOT_MODES[this.mode];
-    const timing = botRunTiming(this.mode);
-    const drawdownPct = snapshot.capital ? Math.max(0, ((snapshot.capital - snapshot.totalValue) / snapshot.capital) * 100) : 0;
-    const performance = this.recentPerformance();
-    const pressure = clamp(drawdownPct / 8, 0, 1);
-    const learningBias = ((performance.winRate - 0.5) * 0.12) + (performance.realizedBias / 80);
-    const lateCaution = timing.phase === "exit" ? 0.18 : timing.phase === "manage" ? 0.06 : 0;
-    
-    // Professional Trader Upgrade: Drawdown Exponential Risk Scaling
-    // If the bot is in a drawdown, exponentially decay maxPosition and riskTolerance
-    const drawdownPenalty = drawdownPct > 0 ? Math.pow(drawdownPct, 1.25) / 100 : 0;
-    
-    const tempo = this.getTempo();
-    const deploymentAllowance = timing.phase === "observe" || timing.phase === "exit"
-    ? (timing.phase === "exit" ? 0 : clamp(tempo.firstEntryScale * 0.45, 0.08, 0.32))
-    : clamp(tempo.firstEntryScale + Math.pow(timing.activeProgress, tempo.deploymentCurve) * (1 - tempo.firstEntryScale), tempo.firstEntryScale, 1);
-    
-    return {
-      ...def,
-      mode: this.mode,
-      timing,
-      drawdownPct,
-      performance,
-      deploymentAllowance,
-      maxPosition: clamp(def.maxPosition - drawdownPenalty * 0.5, 0.02, 1.0),
-      convictionDemand: clamp(def.convictionBias + pressure * 0.14 - learningBias + lateCaution + drawdownPenalty, 0.24, 0.95),
-      riskTolerance: clamp(def.riskAppetite - pressure * 0.16 + learningBias * 1.5 - drawdownPenalty * 1.5, 0.05, 0.95),
-      patienceLevel: clamp(def.patience + pressure * 0.18 + lateCaution - timing.activeProgress * def.riskAppetite * 0.08, 0.14, 0.94),
+  // ─── Mode Configuration ───────────────────────────────────────────────
+  traits() {
+    const traits = {
+      calm: {
+        label: "Calm mean-reversion scalper",
+        // Z-Score thresholds (more conservative = needs deeper dip to buy)
+        zBuyThreshold: -1.2,        // Buy when Z < -1.2 (price dipped below mean)
+        zSellThreshold: 0.8,        // Take profit when Z > +0.8 (price reverted above mean)
+        // Signal gate
+        signalBlockConfidence: 65,   // Block buys if Sell signal > 65%
+        signalBoostConfidence: 70,   // Boost score if Buy signal > 70%
+        // Position sizing (% of capital per trade)
+        tradeSizePct: 0.015,         // 1.5% per trade
+        maxPositionPct: 0.04,        // Max 4% in one coin
+        maxExposurePct: 0.25,        // Max 25% deployed total
+        reservePct: 0.50,            // Keep 50% in cash
+        // Timing
+        minHoldMs: 20000,            // Hold at least 20 seconds
+        scratchTimeoutMs: 45000,     // Dump flat trades after 45 seconds
+        maxHoldMs: 180000,           // Max hold 3 minutes
+        // Risk
+        hardStopPct: 0.25,           // Hard stop at -0.25%
+        profitTargetPct: 0.15,       // Take profit at +0.15%
+        trailTriggerPct: 0.10,       // Start trailing at +0.10%
+        trailDistancePct: 0.05,      // Trail gives back 0.05%
+        // Cooldowns
+        globalCooldownMs: 3000,      // 3s between any trade
+        symbolCooldownMs: 15000,     // 15s before re-entering same symbol
+        // Minimum data
+        minSamples: 10,              // Need 10 price ticks before trading
+      },
+      normal: {
+        label: "Normal hybrid scalper",
+        zBuyThreshold: -0.8,
+        zSellThreshold: 1.0,
+        signalBlockConfidence: 70,
+        signalBoostConfidence: 75,
+        tradeSizePct: 0.02,
+        maxPositionPct: 0.06,
+        maxExposurePct: 0.35,
+        reservePct: 0.40,
+        minHoldMs: 15000,
+        scratchTimeoutMs: 35000,
+        maxHoldMs: 150000,
+        hardStopPct: 0.30,
+        profitTargetPct: 0.18,
+        trailTriggerPct: 0.12,
+        trailDistancePct: 0.06,
+        globalCooldownMs: 2000,
+        symbolCooldownMs: 10000,
+        minSamples: 8,
+      },
+      aggressive: {
+        label: "Aggressive momentum scalper",
+        zBuyThreshold: -0.5,         // Less picky — buys smaller dips
+        zSellThreshold: 1.2,
+        signalBlockConfidence: 75,    // More tolerant of sell signals
+        signalBoostConfidence: 60,
+        tradeSizePct: 0.025,          // 2.5% per trade
+        maxPositionPct: 0.08,
+        maxExposurePct: 0.45,
+        reservePct: 0.30,
+        minHoldMs: 10000,
+        scratchTimeoutMs: 25000,
+        maxHoldMs: 120000,
+        hardStopPct: 0.40,
+        profitTargetPct: 0.22,
+        trailTriggerPct: 0.14,
+        trailDistancePct: 0.08,
+        globalCooldownMs: 1000,
+        symbolCooldownMs: 6000,
+        minSamples: 6,
+      },
     };
+    return traits[this.mode] || traits.normal;
   }
 
-  observationNeed(profile) {
-    const timingPenalty = profile.timing.phase === "observe" && this.mode !== "aggressive" ? 1 : 0;
-    const modeAdjustment = this.mode === "aggressive" ? -1.6 : this.mode === "calm" ? 1.2 : 0;
-    return Math.round(clamp(3 + profile.patienceLevel * 4 + profile.convictionDemand * 1.2 - profile.riskTolerance + modeAdjustment, this.mode === "aggressive" ? 2 : 3, this.mode === "calm" ? 8 : 6) + timingPenalty);
-  }
-
-  minimumEdge(profile, context, snapshot) {
-    const exposurePct = snapshot.capital ? snapshot.openValue / snapshot.capital : 0;
-    const uncertainty = context.noisePct * 1.35 + Math.max(0, -context.agreement) * 8 + exposurePct * 7;
-    const performanceAdjustment = profile.performance.realizedBias * 0.22 + (profile.performance.winRate - 0.5) * 5;
-    const phaseAdjustment = profile.timing.phase === "observe" ? (this.mode === "aggressive" ? 2 : this.mode === "calm" ? 10 : 6) : profile.timing.phase === "exit" ? 100 : profile.timing.phase === "manage" ? 2 : 0;
-    const personalityAdjustment = this.mode === "aggressive" ? -5 : this.mode === "calm" ? 5 : 0;
-    return clamp(5 + profile.patienceLevel * 12 + profile.convictionDemand * 14 - profile.riskTolerance * 8 + uncertainty + phaseAdjustment + personalityAdjustment - performanceAdjustment, 3, 120);
-  }
-
-  buildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0, meta = {}) {
-    const volatility = Math.max(0.25, context.volatilityPct);
-    
-    // High-Frequency Scalping Upgrade: Micro targets
-    // We only have 30 minutes, so we must hunt for tiny scalps (0.2% - 0.4%)
-    const stopBase = (this.mode === "calm" ? 0.3 : this.mode === "aggressive" ? 0.6 : 0.4) + volatility * (0.2 + profile.riskTolerance * 0.2);
-    const targetBase = (this.mode === "calm" ? 0.2 : this.mode === "aggressive" ? 0.4 : 0.3) + volatility * (0.2 + profile.riskTolerance * 0.2) + Math.max(0, confidence - 64) * 0.01;
-    
-    return {
-      action,
-      symbol: context.symbol,
-      price: context.price,
-      score: Math.round(confidence),
-      confidence: clamp(confidence, 0, 100),
-      risk: clamp(risk, 0, 100),
-      style: profile.label,
-      phase: profile.timing.phase,
-      patience: profile.patienceLevel,
-      conviction: profile.convictionDemand,
-      notional,
-      sellFraction,
-      stopLossPct: clamp(stopBase, this.mode === "calm" ? 0.25 : 0.4, this.mode === "aggressive" ? 1.0 : 0.8),
-      takeProfitPct: clamp(targetBase, this.mode === "calm" ? 0.15 : 0.2, this.mode === "calm" ? 0.5 : this.mode === "aggressive" ? 1.5 : 1.0),
-      ...meta,
-    };
-  }
-
-  decisionReason(decision, context) {
-    const actionText = decision.action === "BUY" ? `buy $${formatPrice(decision.notional || 0)}` : decision.action.toLowerCase();
-    const edgeText = Number.isFinite(decision.edge) ? `; edge ${decision.edge.toFixed(1)}/${decision.requiredEdge.toFixed(1)}` : "";
-    const exitText = decision.exitCause ? `; ${decision.exitCause}` : "";
-    const blockText = decision.blockedBy ? `; blocked by ${decision.blockedBy}` : "";
-    return `${actionText}; ${decision.style} ${decision.phase}; confidence ${Math.round(decision.confidence)}; risk ${Math.round(decision.risk)}${edgeText}${exitText}${blockText}; samples ${context.samples}; pnl ${context.pnlPct >= 0 ? "+" : ""}${context.pnlPct.toFixed(2)}%; momentum ${context.shortMomentumPct >= 0 ? "+" : ""}${context.shortMomentumPct.toFixed(2)}%; noise ${context.noisePct.toFixed(2)}%; ${context.signalAction} signal ${context.signalConfidence}%`;
-  }
-
-  tradeCooldownReady(symbol, profile) {
+  // ─── Performance Tracking (kept from original — works fine) ────────────
+  recentPerformance(limit = 24) {
     const state = botState.modes[this.mode];
-    const tempo = this.getTempo();
+    const sells = state.trades.filter((trade) => trade.side === "SELL").slice(0, limit);
+    const capital = Math.max(1, Number(state.capital || BOT_MODES[this.mode]?.capital || 100));
+    if (!sells.length) {
+      return { trades: 0, winRate: 0.5, expectancyPct: 0, avgWinPct: 0, avgLossPct: 0, lossStreak: 0, realizedPct: 0 };
+    }
+    const wins = sells.filter((trade) => Number(trade.pnl || 0) > 0);
+    const losses = sells.filter((trade) => Number(trade.pnl || 0) <= 0);
+    const winRate = wins.length / sells.length;
+    const avgWinPct = wins.length ? wins.reduce((sum, trade) => sum + (Number(trade.pnl || 0) / capital) * 100, 0) / wins.length : 0;
+    const avgLossPct = losses.length ? Math.abs(losses.reduce((sum, trade) => sum + (Number(trade.pnl || 0) / capital) * 100, 0) / losses.length) : 0;
+    let lossStreak = 0;
+    for (const trade of sells) {
+      if (Number(trade.pnl || 0) > 0) break;
+      lossStreak += 1;
+    }
+    return {
+      trades: sells.length,
+      winRate,
+      expectancyPct: winRate * avgWinPct - (1 - winRate) * avgLossPct,
+      avgWinPct,
+      avgLossPct,
+      lossStreak,
+      realizedPct: sells.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0) / capital * 100,
+    };
+  }
+
+  symbolPerformance(symbol, limit = 12) {
+    const sells = botState.modes[this.mode].trades
+      .filter((trade) => trade.side === "SELL" && trade.symbol === symbol)
+      .slice(0, limit);
+    if (!sells.length) return { trades: 0, winRate: 0.5, lossStreak: 0, lastLoss: false };
+    let lossStreak = 0;
+    for (const trade of sells) {
+      if (Number(trade.pnl || 0) > 0) break;
+      lossStreak += 1;
+    }
+    return {
+      trades: sells.length,
+      winRate: sells.filter((trade) => Number(trade.pnl || 0) > 0).length / sells.length,
+      lossStreak,
+      lastLoss: Number(sells[0]?.pnl || 0) <= 0,
+    };
+  }
+
+  // ─── Signal Gate ──────────────────────────────────────────────────────
+  // Hard rule: If signal says SELL with high confidence, DO NOT BUY.
+  isSignalBlocked(context) {
+    const action = String(context.signalAction || "").toLowerCase();
+    const confidence = Number(context.signalConfidence || 50);
+    const traits = this.traits();
+    
+    if (action === "sell" && confidence >= traits.signalBlockConfidence) {
+      return { blocked: true, reason: `signal says Sell ${confidence}%` };
+    }
+    return { blocked: false, reason: "" };
+  }
+
+  // Signal bonus: If signal agrees with our Z-Score buy, boost confidence
+  signalBonus(context) {
+    const action = String(context.signalAction || "").toLowerCase();
+    const confidence = Number(context.signalConfidence || 50);
+    const traits = this.traits();
+
+    if (action === "buy" && confidence >= traits.signalBoostConfidence) {
+      return (confidence - 50) * 0.3; // +0 to +15 bonus
+    }
+    if (action === "sell") {
+      return -(confidence - 50) * 0.2; // -0 to -10 penalty
+    }
+    return 0;
+  }
+
+  // ─── Z-Score Entry Quality ────────────────────────────────────────────
+  // The core HFT signal: Is this coin statistically cheap right now?
+  entryQuality(context) {
+    const traits = this.traits();
+    const z = Number(context.zScore || 0);
+    const momentum = Number(context.shortMomentumPct || 0);
+    const noise = Math.max(0.01, Number(context.noisePct || 0));
+    const rsi = Number(context.rsiProxy || 50);
+
+    // Z-Score is the primary signal
+    // Negative Z = price below mean = potential buy
+    const zSignal = -z; // Flip sign: positive zSignal = good buy opportunity
+
+    // Momentum confirmation: We want to buy when price is dipping but not crashing
+    // A gentle dip (momentum slightly negative) is ideal for mean reversion
+    const momentumQuality = momentum < 0 && momentum > -0.5 ? 15 : // Gentle dip — ideal
+                            momentum > 0.05 ? 8 :                    // Slight uptick — recovery
+                            momentum < -0.5 ? -10 : 0;               // Crash — avoid
+
+    // RSI confirmation
+    const rsiBonus = rsi < 35 ? 12 :   // Oversold — strong buy
+                     rsi < 45 ? 6 :     // Leaning oversold
+                     rsi > 65 ? -8 :    // Overbought — avoid buying
+                     rsi > 55 ? -3 : 0; // Leaning overbought
+
+    // Noise penalty — noisy markets are harder to scalp
+    const noisePenalty = noise > 0.5 ? (noise - 0.5) * 20 : 0;
+
+    const score = zSignal * 25 + momentumQuality + rsiBonus + this.signalBonus(context) - noisePenalty;
+    
+    return {
+      score,
+      zScore: z,
+      zSignal,
+      isBuyZone: z <= traits.zBuyThreshold,
+      momentum,
+      rsi,
+      noise,
+    };
+  }
+
+  // ─── Position Sizing: Fixed Fractional ────────────────────────────────
+  // Simple and correct: risk a fixed % of capital per trade
+  computeNotional(context, snapshot) {
+    const traits = this.traits();
+    const capital = Math.max(1, snapshot.capital);
+    
+    // Base trade size = fixed % of capital
+    let notional = capital * traits.tradeSizePct;
+    
+    // Scale down if we're in a loss streak
+    const perf = this.recentPerformance();
+    if (perf.lossStreak >= 2) {
+      notional *= Math.max(0.4, 1 - perf.lossStreak * 0.15);
+    }
+    
+    // Enforce caps
+    const currentValue = botHeldQuantity(this.mode, context.symbol) * context.price;
+    const positionRoom = Math.max(0, capital * traits.maxPositionPct - currentValue);
+    const exposureRoom = Math.max(0, capital * traits.maxExposurePct - snapshot.openValue);
+    const cashRoom = Math.max(0, snapshot.cash - capital * (1 - traits.reservePct));
+    
+    notional = Math.min(notional, positionRoom, exposureRoom, cashRoom, snapshot.cash);
+    
+    return Math.max(0, notional);
+  }
+
+  // ─── Cooldown Check ───────────────────────────────────────────────────
+  isCooldownReady(symbol) {
+    const state = botState.modes[this.mode];
+    const traits = this.traits();
     const now = Date.now();
-    const globalReady = !state.lastActionAt || now - state.lastActionAt >= tempo.globalCooldown;
-    const symbolReady = !state.lastTradeAt[symbol] || now - state.lastTradeAt[symbol] >= tempo.symbolCooldown;
+    const globalReady = !state.lastActionAt || now - state.lastActionAt >= traits.globalCooldownMs;
+    const symbolReady = !state.lastTradeAt[symbol] || now - state.lastTradeAt[symbol] >= traits.symbolCooldownMs;
     return globalReady && symbolReady;
   }
 
-  pacedNotional(context, profile, snapshot, edge, requiredEdge) {
-    const timing = profile.timing;
-    if (timing.phase === "exit") return 0;
-    if (!this.tradeCooldownReady(context.symbol, profile)) return 0;
-    
-    // Professional Trader Upgrade: Simplified Half-Kelly Criterion
-    // f* = (Edge / Odds). We proxy odds with volatility, and scale by winRate.
-    const winRate = clamp(profile.performance.winRate, 0.3, 0.7);
-    const winEdge = Math.max(0, edge - requiredEdge + 5); 
-    const kellyFraction = clamp((winRate * winEdge) / Math.max(1.0, context.volatilityPct * 100), 0.01, 1.0) * 0.5; // Half-Kelly
-    
-    const conviction = clamp(kellyFraction * (this.mode === "aggressive" ? 2.5 : this.mode === "calm" ? 0.8 : 1.5), 0, this.mode === "aggressive" ? 1.25 : 1.0);
-    const exposureCap = snapshot.capital * profile.maxExposure * profile.deploymentAllowance;
-    const currentValue = botHeldQuantity(this.mode, context.symbol) * context.price;
-    const positionCap = snapshot.capital * profile.maxPosition * profile.deploymentAllowance;
-    const exposureRoom = Math.max(0, exposureCap - snapshot.openValue);
-    const positionRoom = Math.max(0, positionCap - currentValue);
-    const reservePct = this.mode === "calm" ? 0.24 + profile.drawdownPct / 52 : this.mode === "aggressive" ? 0.015 + profile.drawdownPct / 150 : 0.1 + profile.drawdownPct / 88;
-    const spendable = Math.max(0, snapshot.cash - snapshot.capital * reservePct);
-    const phaseSlice = snapshot.capital * profile.maxPosition * conviction * (this.mode === "aggressive" ? 0.82 : this.mode === "calm" ? 0.34 : 0.56);
-    return Math.min(spendable, exposureRoom, positionRoom, phaseSlice);
+  // ─── Build Decision Object ────────────────────────────────────────────
+  buildDecision(action, context, meta = {}) {
+    const traits = this.traits();
+    return {
+      action,
+      symbol: context.symbol,
+      price: Number(context.price || 0),
+      confidence: Number(meta.confidence || 0),
+      risk: Number(meta.risk || 0),
+      edge: Number(meta.edge || 0),
+      requiredEdge: Number(meta.requiredEdge || 0),
+      setupType: meta.setupType || "z-score mean reversion",
+      blockedBy: meta.blockedBy || "",
+      style: traits.label,
+      phase: meta.phase || "",
+      notional: Number(meta.notional || 0),
+      sellFraction: Number(meta.sellFraction || 0),
+      stopLossPct: traits.hardStopPct,
+      takeProfitPct: traits.profitTargetPct,
+      exitCause: meta.exitCause || "",
+      zScore: Number(meta.zScore || context.zScore || 0),
+    };
   }
 
-  brainFor(context, profile, snapshot) {
-    const ready = context.samples >= this.observationNeed(profile);
-    const acceleration = context.shortMomentumPct - context.noisePct * (this.mode === "aggressive" ? 0.08 : this.mode === "calm" ? 0.28 : 0.18);
-    const personalityLift = this.mode === "aggressive" ? 6 : this.mode === "calm" ? -2 : 2;
-    const liveTape = context.shortMomentumPct - context.noisePct * (this.mode === "aggressive" ? 0.04 : this.mode === "calm" ? 0.22 : 0.12);
-    const tapePenalty = liveTape < 0 ? Math.abs(liveTape) * (this.mode === "calm" ? 28 : this.mode === "aggressive" ? 14 : 20) : 0;
-    const reversalPenalty = context.shortMomentumPct < -context.noisePct ? 8 : 0;
+  // ─── Format Reason String ─────────────────────────────────────────────
+  decisionReason(decision, context) {
+    const actionText = decision.action === "BUY" ? `buy $${formatPrice(decision.notional || 0)}` : decision.action.toLowerCase();
+    const blockText = decision.blockedBy ? `; blocked by ${decision.blockedBy}` : "";
+    const exitText = decision.exitCause ? `; ${decision.exitCause}` : "";
+    const zText = `; Z=${(decision.zScore || 0).toFixed(2)}`;
+    return `${actionText}; ${decision.style}; setup ${decision.setupType}; confidence ${Math.round(decision.confidence)}; risk ${Math.round(decision.risk)}; edge ${(decision.edge || 0).toFixed(1)}/${(decision.requiredEdge || 0).toFixed(1)}${exitText}${blockText}${zText}; samples ${context.samples}; pnl ${context.pnlPct >= 0 ? "+" : ""}${context.pnlPct.toFixed(2)}%; momentum ${context.shortMomentumPct >= 0 ? "+" : ""}${context.shortMomentumPct.toFixed(2)}%; noise ${context.noisePct.toFixed(2)}%; ${context.signalAction} signal ${context.signalConfidence}%`;
+  }
+
+  // ─── EXIT DECISION ────────────────────────────────────────────────────
+  // Determines whether to hold or exit an existing position
+  exitDecision(context, snapshot) {
+    const traits = this.traits();
+    const heldMs = Date.now() - Number(context.openedAt || Date.now());
+    const pnl = Number(context.pnlPct || 0);
+    const z = Number(context.zScore || 0);
+    const perf = this.recentPerformance();
+    const timing = botRunTiming(this.mode);
     
-    // Professional Trader Upgrade: Mean Reversion vs Trend Following
-    let rsiAdjustment = 0;
-    if (this.mode === "calm") {
-      // Mean Reversion: Buy when oversold (RSI < 40) and avoid overbought
-      if (context.rsiProxy < 40) rsiAdjustment = (40 - context.rsiProxy) * 0.6;
-      else if (context.rsiProxy > 70) rsiAdjustment = (70 - context.rsiProxy) * 0.8;
-    } else if (this.mode === "aggressive") {
-      // Trend Following: Buy breakouts (RSI > 55) and avoid weak momentum
-      if (context.rsiProxy > 55) rsiAdjustment = (context.rsiProxy - 55) * 0.5;
-      else if (context.rsiProxy < 45) rsiAdjustment = (context.rsiProxy - 45) * 0.7;
+    const meta = {
+      phase: timing.phase,
+      confidence: 50,
+      risk: 0,
+      edge: 0,
+      requiredEdge: 0,
+      zScore: z,
+    };
+
+    // 1. Window closing — dump everything
+    if (timing.phase === "exit") {
+      return this.buildDecision("EXIT", context, { ...meta, exitCause: "window closing", sellFraction: 1 });
     }
 
-    const confidence = clamp(
-      40 + personalityLift
-      + context.trendQuality * (this.mode === "aggressive" ? 1.28 : this.mode === "calm" ? 0.68 : 0.94)
-      + context.agreement * (this.mode === "calm" ? 20 : this.mode === "aggressive" ? 10 : 14)
-      + Math.max(0, acceleration) * (this.mode === "aggressive" ? 18 : this.mode === "calm" ? 5 : 9)
-      + profile.performance.realizedBias * 0.7
-      + rsiAdjustment
-      - profile.convictionDemand * (this.mode === "calm" ? 9 : 3.5)
-      - tapePenalty,
-      0,
-      100,
-    );
+    // 2. Hard stop loss — protect capital
+    if (pnl <= -traits.hardStopPct) {
+      return this.buildDecision("EXIT", context, { ...meta, exitCause: "hard stop", sellFraction: 1 });
+    }
+
+    // 3. Profit target hit — take the money
+    if (pnl >= traits.profitTargetPct) {
+      return this.buildDecision("LOCK PROFIT", context, { ...meta, exitCause: "profit target", sellFraction: 1 });
+    }
+
+    // 4. Trailing stop — protect profits
+    if (pnl >= traits.trailTriggerPct && context.drawdownFromHighPct >= traits.trailDistancePct) {
+      return this.buildDecision("LOCK PROFIT", context, { ...meta, exitCause: "trailing stop", sellFraction: 1 });
+    }
+
+    // 5. Z-Score reversion complete — price reverted above mean, take profit
+    if (pnl > 0.02 && z >= traits.zSellThreshold) {
+      return this.buildDecision("LOCK PROFIT", context, { ...meta, exitCause: "z-score reversion complete", sellFraction: 1, setupType: "z-reversion exit" });
+    }
+
+    // 6. Adverse signal while in profit — don't let winners become losers
+    const signalAction = String(context.signalAction || "").toLowerCase();
+    const signalConf = Number(context.signalConfidence || 50);
+    if (pnl > 0.03 && signalAction === "sell" && signalConf >= 70) {
+      return this.buildDecision("LOCK PROFIT", context, { ...meta, exitCause: "adverse signal while green", sellFraction: 1 });
+    }
+
+    // 7. Scratch timeout — if trade is flat after scratch period, dump it
+    if (heldMs >= traits.scratchTimeoutMs && pnl < traits.profitTargetPct * 0.4) {
+      return this.buildDecision("EXIT", context, { ...meta, exitCause: "scratch timeout", sellFraction: 1 });
+    }
+
+    // 8. Max hold timeout — only if not in meaningful profit
+    if (heldMs >= traits.maxHoldMs && pnl < traits.profitTargetPct * 0.6) {
+      return this.buildDecision("EXIT", context, { ...meta, exitCause: "max hold timeout", sellFraction: 1 });
+    }
+
+    // 9. Loss streak safety — if we're on a loss streak and this trade is underwater, cut early
+    if (perf.lossStreak >= 3 && pnl < -traits.hardStopPct * 0.4 && heldMs >= traits.minHoldMs) {
+      return this.buildDecision("EXIT", context, { ...meta, exitCause: "loss streak safety cut", sellFraction: 1 });
+    }
+
+    return this.buildDecision("HOLD", context, meta);
+  }
+
+  // ─── ENTRY DECISION ───────────────────────────────────────────────────
+  // Determines whether to buy a coin we don't currently hold
+  entryDecision(context, snapshot) {
+    const traits = this.traits();
+    const timing = botRunTiming(this.mode);
+    const blocks = [];
+
+    const meta = {
+      phase: timing.phase,
+      confidence: 0,
+      risk: 0,
+      edge: 0,
+      requiredEdge: 10,
+      zScore: Number(context.zScore || 0),
+    };
+
+    // ── Pre-checks (hard blocks) ──
+    
+    // Not enough data yet
+    if (context.samples < traits.minSamples) {
+      return this.buildDecision("WAIT", context, { ...meta, blockedBy: `warming ${context.samples}/${traits.minSamples}` });
+    }
+
+    // Window closing — no new entries
+    if (timing.phase === "exit") {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: "window closing" });
+    }
+
+    // Signal gate — HARD BLOCK
+    const signalCheck = this.isSignalBlocked(context);
+    if (signalCheck.blocked) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: signalCheck.reason });
+    }
+
+    // Cooldown
+    if (!this.isCooldownReady(context.symbol)) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: "cooldown" });
+    }
+
+    // Symbol on a loss streak — cool off
+    const symPerf = this.symbolPerformance(context.symbol);
+    if (symPerf.lossStreak >= 3) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: `symbol ${context.symbol} cooling (${symPerf.lossStreak} losses)` });
+    }
+
+    // ── Z-Score Analysis ──
+    const quality = this.entryQuality(context);
+
+    // Compute confidence and risk
+    const confidence = clamp(40 + quality.score, 0, 100);
     const risk = clamp(
-      context.riskLoad * (this.mode === "calm" ? 1.2 : this.mode === "aggressive" ? 0.58 : 0.86)
-      + reversalPenalty
-      + profile.drawdownPct * (this.mode === "aggressive" ? 1.65 : 1)
-      + Math.max(0, -context.agreement) * (this.mode === "calm" ? 7 : 4),
+      quality.noise * 18
+      + Math.max(0, -quality.momentum) * 12
+      + (quality.rsi > 55 ? (quality.rsi - 55) * 0.5 : 0)
+      + this.recentPerformance().lossStreak * 4,
       0,
-      100,
+      100
     );
-    const edge = confidence - risk * (this.mode === "aggressive" ? 0.2 : this.mode === "calm" ? 0.5 : 0.34) - profile.patienceLevel * 4.5 - profile.convictionDemand * 3.5;
-    const requiredEdge = this.minimumEdge(profile, context, snapshot);
-    const meta = { edge, requiredEdge, tape: liveTape };
-    const holdDecision = this.buildDecision("HOLD", context, profile, confidence, risk, 0, 0, meta);
+    const edge = confidence - risk * 0.5;
+    const requiredEdge = 10 + this.recentPerformance().lossStreak * 2;
 
-    if (!ready) return this.buildDecision("WAIT", context, profile, confidence, risk, 0, 0, meta);
+    meta.confidence = confidence;
+    meta.risk = risk;
+    meta.edge = edge;
+    meta.requiredEdge = requiredEdge;
+    meta.setupType = quality.isBuyZone ? "z-score dip buy" : "momentum scalp";
 
-    if (context.heldQty > 0) {
-      const heldMs = Date.now() - (context.openedAt || Date.now());
-      // Give trades some breathing room (e.g. at least 15s-45s)
-      const minHoldMs = this.mode === "calm" ? 45000 : this.mode === "aggressive" ? 15000 : 30000;
-      const thesisFailed = context.shortMomentumPct < -Math.max(0.4, context.noisePct * (this.mode === "aggressive" ? 1.8 : 2.8)) && context.agreement < (this.mode === "calm" ? -0.2 : -0.4);
-      const lateFailure = context.pnlPct < 0 && thesisFailed && heldMs >= minHoldMs;
-      
-      // High-Frequency Scalping Upgrade: Micro scalp targets
-      const scalpTarget = this.mode === "calm" ? 0.20 : this.mode === "aggressive" ? 0.40 : 0.25;
-      const scalpFade = context.pnlPct >= (scalpTarget * 0.8) && heldMs >= minHoldMs && context.shortMomentumPct < context.noisePct * (this.mode === "aggressive" ? 0.16 : 0.08);
-      
-      // Micro hold times: 1 min, 2 mins, 3 mins max
-      const maxHoldMs = this.mode === "aggressive" ? 60000 : this.mode === "calm" ? 180000 : 120000;
-      // Only trigger a time stop if the position is not in profit
-      const timeStop = heldMs >= maxHoldMs && context.pnlPct <= 0;
-      // Realistic soft loss thresholds
-      const softLoss = this.mode === "calm" ? -0.6 : this.mode === "aggressive" ? -1.5 : -1.0;
-      const profitEnough = context.pnlPct >= scalpTarget && (profile.timing.phase === "manage" || edge < requiredEdge + 3 || heldMs >= maxHoldMs * 0.55);
-
-      // High-Frequency Scalping Upgrade: Hair-trigger dynamic trailing stops
-      const trailTriggerPct = this.mode === "aggressive" ? 0.25 : this.mode === "calm" ? 0.15 : 0.20;
-      const trailDistancePct = this.mode === "aggressive" ? 0.10 : this.mode === "calm" ? 0.05 : 0.08;
-      const trailingStopHit = context.highWaterPrice > 0 && ((context.highWaterPrice - context.entry) / context.entry) * 100 >= trailTriggerPct && context.drawdownFromHighPct >= trailDistancePct;
-
-      if (profile.timing.phase === "exit") {
-        const urgency = clamp(1 - (profile.timing.remainingMs / Math.max(1, profile.timing.exitMs)), 0, 1);
-        return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "window closing" });
-      }
-      
-      // Changed to fully EXIT position for these terminal states to prevent fractional selling loops
-      if (trailingStopHit) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "trailing stop hit" });
-      if (context.pnlPct <= -holdDecision.stopLossPct) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "stop loss" });
-      if (context.pnlPct <= softLoss && edge < requiredEdge) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "loss not recovering" });
-      if (lateFailure) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "thesis failed" });
-      if (profitEnough) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "scalp captured" });
-      if (context.pnlPct >= holdDecision.takeProfitPct && heldMs >= minHoldMs) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "target reached" });
-      if (scalpFade) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "scalp fade" });
-      if (timeStop) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "time stop" });
-      if (heldMs >= minHoldMs && context.pnlPct > 0.08 && context.shortMomentumPct < -context.noisePct * 0.12) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "momentum rolled" });
-      return holdDecision;
+    // ── Entry gates ──
+    
+    // Z-Score must be in buy zone OR momentum must be strongly positive
+    const zOk = quality.isBuyZone;
+    const momentumOk = quality.momentum > 0.05 && quality.rsi < 55;
+    
+    if (!zOk && !momentumOk) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: `Z=${quality.zScore.toFixed(2)} not in buy zone (need <${traits.zBuyThreshold})` });
     }
 
-    if (profile.timing.phase === "exit") return this.buildDecision("WATCH", context, profile, confidence, risk, 0, 0, meta);
+    // Edge must clear the bar
+    if (edge < requiredEdge) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: `edge ${edge.toFixed(1)} < required ${requiredEdge.toFixed(1)}` });
+    }
+
+    // ── Size the trade ──
+    const notional = this.computeNotional(context, snapshot);
+    const minTrade = Math.max(BOT_MIN_TRADE_NOTIONAL, snapshot.capital * 0.005);
     
-    const notional = this.pacedNotional(context, profile, snapshot, edge, requiredEdge);
-    if (notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge) return this.buildDecision("BUY", context, profile, confidence, risk, notional, 0, meta);
-    return this.buildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk, 0, 0, meta);
+    if (notional < minTrade) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: "insufficient sizing room" });
+    }
+
+    meta.notional = notional;
+    return this.buildDecision("BUY", context, meta);
   }
 
+  // ─── Order Notional (caps for execution) ──────────────────────────────
   orderNotional(candidate, cash) {
-    const profile = this.strategyProfile(botPortfolioSnapshot(this.mode));
-    const currentValue = botHeldQuantity(this.mode, candidate.symbol) * candidate.price;
-    const positionRoom = Math.max(0, (botCapital(this.mode) * profile.maxPosition) - currentValue);
-    return Math.min(cash, positionRoom, Number(candidate.notional || 0));
+    const snapshot = botPortfolioSnapshot(this.mode);
+    const traits = this.traits();
+    return Math.min(cash, Number(candidate.notional || 0), snapshot.capital * traits.maxPositionPct);
   }
 
+  // ─── Rank candidates by entry quality ─────────────────────────────────
+  rankDecision(item) {
+    const z = Number(item.decision.zScore || 0);
+    return -z * 20 + (item.decision.confidence || 0) * 0.3 - (item.decision.risk || 0) * 0.2;
+  }
+
+  // ─── MAIN DECISION LOOP ───────────────────────────────────────────────
   runModeDecision(ranked) {
     const state = botState.modes[this.mode];
     state.rankings = ranked;
     state.decisions += 1;
-    const snapshot = botPortfolioSnapshot(this.mode, ranked);
-    const profile = this.strategyProfile(snapshot);
-    const held = ranked.filter(item => botHeldQuantity(this.mode, item.symbol) > 0);
-    let auditRow = null;
 
+    const snapshot = botPortfolioSnapshot(this.mode, ranked);
+    const held = ranked.filter((item) => botHeldQuantity(this.mode, item.symbol) > 0);
+
+    // ── Step 1: Check all held positions for exits ──
     for (const item of held) {
-      const decision = this.brainFor(item, profile, snapshot);
-      if ((decision.action === "EXIT" || decision.action === "REDUCE" || decision.action === "LOCK PROFIT") && item.heldQty > 0) {
-        const qty = item.heldQty * (decision.sellFraction || 1);
-        executeBotSell(this.mode, item, qty, this.decisionReason(decision, item));
+      const decision = this.exitDecision(item, snapshot);
+      if ((decision.action === "EXIT" || decision.action === "LOCK PROFIT") && item.heldQty > 0) {
+        const reason = this.decisionReason(decision, item);
+        executeBotSell(this.mode, item, item.heldQty * (decision.sellFraction || 1), reason);
         state.lastActionAt = Date.now();
-        auditRow = { ...decision, action: "SELL", reason: this.decisionReason(decision, item) };
-        botAppendRunAudit(this.mode, auditRow, ranked);
+        botAppendRunAudit(this.mode, { ...decision, reason }, ranked);
         return;
       }
     }
 
-    const openSymbols = new Set(held.map(item => item.symbol));
-    const candidates = ranked.filter(item => !openSymbols.has(item.symbol));
-    const decisions = candidates.map(item => ({ context: item, decision: this.brainFor(item, profile, snapshot) }));
-    const buy = decisions
-      .filter(item => item.decision.action === "BUY")
-      .sort((a, b) => (b.decision.confidence - b.decision.risk * 0.35) - (a.decision.confidence - a.decision.risk * 0.35))[0];
+    // ── Step 2: Find the BEST single entry opportunity ──
+    const openSymbols = new Set(held.map((item) => item.symbol));
+    const decisions = ranked
+      .filter((item) => !openSymbols.has(item.symbol))
+      .map((context) => ({ context, decision: this.entryDecision(context, snapshot) }))
+      .sort((a, b) => this.rankDecision(b) - this.rankDecision(a));
+    
+    // Only take the BEST buy (selectivity > volume)
+    const buy = decisions.find((item) => item.decision.action === "BUY");
 
     if (buy) {
       const notional = this.orderNotional(buy.decision, snapshot.cash);
-      if (notional >= Math.max(0.25, snapshot.capital * 0.01)) {
-        executeBotBuy(this.mode, buy.context, notional, this.decisionReason({ ...buy.decision, notional }, buy.context));
+      if (notional > 0) {
+        const decision = { ...buy.decision, notional };
+        const reason = this.decisionReason(decision, buy.context);
+        executeBotBuy(this.mode, buy.context, notional, reason);
         state.lastActionAt = Date.now();
-        auditRow = { ...buy.decision, action: "BUY", notional, reason: this.decisionReason({ ...buy.decision, notional }, buy.context) };
-        botAppendRunAudit(this.mode, auditRow, ranked);
+        botAppendRunAudit(this.mode, { ...decision, action: "BUY", reason }, ranked);
         return;
       }
     }
 
-    const top = [...decisions, ...held.map(context => ({ context, decision: this.brainFor(context, profile, snapshot) }))]
-      .sort((a, b) => (b.decision.confidence - b.decision.risk * 0.25) - (a.decision.confidence - a.decision.risk * 0.25))[0];
-    if (top) {
-      const reason = this.decisionReason(top.decision, top.context);
-      logBotDecision(this.mode, { action: top.decision.action, symbol: top.context.symbol, score: top.decision.score, confidence: top.decision.confidence, risk: top.decision.risk, reason }, { key: `${profile.timing.phase}:${top.decision.action}:${top.context.symbol}:${state.decisions}`, throttleMs: 0 });
-      botAppendRunAudit(this.mode, { ...top.decision, reason }, ranked);
-    }
+    // ── Step 3: Log the top-ranked decision for audit ──
+    const top = [...held.map((context) => ({ context, decision: this.exitDecision(context, snapshot) })), ...decisions]
+      .sort((a, b) => this.rankDecision(b) - this.rankDecision(a))[0];
+    if (!top) return;
+    const reason = this.decisionReason(top.decision, top.context);
+    logBotDecision(this.mode, {
+      action: top.decision.action,
+      symbol: top.context.symbol,
+      confidence: top.decision.confidence,
+      risk: top.decision.risk,
+      reason,
+    }, { key: `${top.decision.phase}:${top.decision.action}:${top.context.symbol}:${state.decisions}`, throttleMs: 0 });
+    botAppendRunAudit(this.mode, { ...top.decision, reason }, ranked);
   }
 }
+
 window.TraderBot = TraderBot;

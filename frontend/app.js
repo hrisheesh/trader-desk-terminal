@@ -222,10 +222,10 @@ const BOT_STATE_KEY = "trader-desk-bot-state-v3";
 const BOT_RUNS_KEY = "trader-desk-bot-runs-v1";
 const BOT_PRICE_MEMORY_LIMIT = 28;
 const BOT_MIN_TRADE_NOTIONAL = 1;
-const BOT_TICK_MS = 1000;
+const BOT_TICK_MS = 500;
 const BOT_FULLY_DEPLOYED_LOG_MS = 10000;
 const BOT_RUN_HISTORY_LIMIT = 20;
-const BOT_RUN_AUDIT_LIMIT = 1200;
+const BOT_RUN_AUDIT_LIMIT = 12000;
 const BOT_MODES = {
   calm: {
     label: "Calm",
@@ -234,12 +234,12 @@ const BOT_MODES = {
     riskAppetite: 0.26,
     patience: 0.86,
     convictionBias: 0.72,
-    maxExposure: 0.46,
-    maxPosition: 0.18,
-    stopLossBase: 0.8,
-    stopLossVol: 0.4,
-    takeProfitBase: 1.5,
-    takeProfitVol: 0.8,
+    maxExposure: 0.09,
+    maxPosition: 0.012,
+    stopLossBase: 0.34,
+    stopLossVol: 0.12,
+    takeProfitBase: 0.18,
+    takeProfitVol: 0.12,
     signalBias: 0.4,
   },
   normal: {
@@ -249,12 +249,12 @@ const BOT_MODES = {
     riskAppetite: 0.52,
     patience: 0.58,
     convictionBias: 0.52,
-    maxExposure: 0.78,
-    maxPosition: 0.36,
-    stopLossBase: 1.2,
-    stopLossVol: 0.6,
-    takeProfitBase: 2.2,
-    takeProfitVol: 1.2,
+    maxExposure: 0.18,
+    maxPosition: 0.025,
+    stopLossBase: 0.46,
+    stopLossVol: 0.16,
+    takeProfitBase: 0.24,
+    takeProfitVol: 0.16,
     signalBias: 0.6,
   },
   aggressive: {
@@ -264,12 +264,12 @@ const BOT_MODES = {
     riskAppetite: 0.9,
     patience: 0.18,
     convictionBias: 0.26,
-    maxExposure: 0.98,
-    maxPosition: 0.72,
-    stopLossBase: 1.8,
-    stopLossVol: 1.0,
-    takeProfitBase: 3.5,
-    takeProfitVol: 1.8,
+    maxExposure: 0.3,
+    maxPosition: 0.04,
+    stopLossBase: 0.34,
+    stopLossVol: 0.16,
+    takeProfitBase: 0.15,
+    takeProfitVol: 0.22,
     signalBias: 0.8,
   },
 };
@@ -623,10 +623,18 @@ phase: timing.phase,
 mode,
 action: row.action || "WATCH",
 symbol: row.symbol || null,
-price: Number(row.price || 0),
-confidence: Number(row.confidence || row.score || 0),
-risk: Number(row.risk || 0),
-cash: snap.cash,
+    price: Number(row.price || 0),
+    confidence: Number(row.confidence || row.score || 0),
+    risk: Number(row.risk || 0),
+    edge: Number(row.edge || 0),
+    requiredEdge: Number(row.requiredEdge || 0),
+    notional: Number(row.notional || 0),
+    setupType: row.setupType || "",
+    blockedBy: row.blockedBy || "",
+    exitCause: row.exitCause || "",
+    stopLossPct: Number(row.stopLossPct || 0),
+    takeProfitPct: Number(row.takeProfitPct || 0),
+    cash: snap.cash,
 deployed: snap.deployed,
 totalValue: snap.totalValue,
 pnl: snap.pnl,
@@ -1138,7 +1146,7 @@ function botHistoryStats(history, price) {
   const prices = history.map(item => Number(item.price || 0)).filter(Boolean);
   const samples = prices.length;
   if (!samples || !price) {
-    return { samples: 0, momentumPct: 0, shortMomentumPct: 0, volatilityPct: 0.75, noisePct: 0, supportDistancePct: 0, resistanceDistancePct: 0 };
+    return { samples: 0, momentumPct: 0, shortMomentumPct: 0, volatilityPct: 0.75, noisePct: 0, rsiProxy: 50, zScore: 0, priceMean: price || 0, priceStdDev: 0, supportDistancePct: 0, resistanceDistancePct: 0 };
   }
   const first = prices[0];
   const pivot = prices[Math.max(0, samples - 4)];
@@ -1153,7 +1161,7 @@ function botHistoryStats(history, price) {
   const volatilityPct = clamp(Math.sqrt(variance), 0.08, 7);
   const noisePct = clamp(volatilityPct - Math.abs(mean), 0, 7);
   
-  // Professional Trader Upgrade: Pseudo RSI calculation
+  // RSI calculation
   let gains = 0;
   let losses = 0;
   returns.forEach(ret => {
@@ -1163,6 +1171,15 @@ function botHistoryStats(history, price) {
   const rs = losses === 0 ? 100 : gains / losses;
   const rsiProxy = returns.length > 0 ? 100 - (100 / (1 + rs)) : 50;
   
+  // HFT Core: Z-Score Mean Reversion
+  // Z = (Price - Mean) / StdDev
+  // Z < -1.5 = statistically oversold (BUY zone)
+  // Z > +1.5 = statistically overbought (SELL zone / take profit)
+  const priceMean = prices.reduce((s, p) => s + p, 0) / samples;
+  const priceVariance = prices.reduce((s, p) => s + ((p - priceMean) ** 2), 0) / samples;
+  const priceStdDev = Math.sqrt(priceVariance);
+  const zScore = priceStdDev > 0 ? (price - priceMean) / priceStdDev : 0;
+  
   return {
     samples,
     momentumPct: first ? ((price - first) / first) * 100 : 0,
@@ -1170,6 +1187,9 @@ function botHistoryStats(history, price) {
     volatilityPct,
     noisePct,
     rsiProxy,
+    zScore,
+    priceMean,
+    priceStdDev,
     supportDistancePct: low ? ((price - low) / low) * 100 : 0,
     resistanceDistancePct: high ? ((high - price) / price) * 100 : 0,
   };
