@@ -18,37 +18,30 @@ class TraderBot {
   traits() {
     const traits = {
       calm: {
-        label: "Calm mean-reversion scalper",
-        // Z-Score thresholds (more conservative = needs deeper dip to buy)
-        zBuyThreshold: -1.2,        // Buy when Z < -1.2 (price dipped below mean)
-        zSellThreshold: 0.8,        // Take profit when Z > +0.8 (price reverted above mean)
-        // Signal gate
-        signalBlockConfidence: 65,   // Block buys if Sell signal > 65%
-        signalBoostConfidence: 70,   // Boost score if Buy signal > 70%
-        // Position sizing (% of capital per trade)
-        tradeSizePct: 0.015,         // 1.5% per trade
-        maxPositionPct: 0.04,        // Max 4% in one coin
-        maxExposurePct: 0.25,        // Max 25% deployed total
-        reservePct: 0.50,            // Keep 50% in cash
-        // Timing
-        minHoldMs: 20000,            // Hold at least 20 seconds
-        scratchTimeoutMs: 45000,     // Dump flat trades after 45 seconds
-        maxHoldMs: 180000,           // Max hold 3 minutes
-        // Risk
-        hardStopPct: 0.25,           // Hard stop at -0.25%
-        profitTargetPct: 0.15,       // Take profit at +0.15%
-        trailTriggerPct: 0.10,       // Start trailing at +0.10%
-        trailDistancePct: 0.05,      // Trail gives back 0.05%
-        // Cooldowns
-        globalCooldownMs: 3000,      // 3s between any trade
-        symbolCooldownMs: 15000,     // 15s before re-entering same symbol
-        // Minimum data
-        minSamples: 10,              // Need 10 price ticks before trading
+        label: "Calm micro-scalper",
+        zBuyThreshold: -2.5,        // Extreme dip
+        zSellThreshold: 0.5,        
+        signalBlockConfidence: 65,   
+        signalBoostConfidence: 70,   
+        tradeSizePct: 0.015,         
+        maxPositionPct: 0.04,        
+        maxExposurePct: 0.25,        
+        reservePct: 0.50,            
+        minHoldMs: 20000,            
+        scratchTimeoutMs: 300000,    // 5 minutes
+        maxHoldMs: 600000,           // 10 minutes
+        hardStopPct: 0.30,           
+        profitTargetPct: 0.04,       // Micro target
+        trailTriggerPct: 0.02,       // Early trail
+        trailDistancePct: 0.01,      // Extremely tight trail
+        globalCooldownMs: 3000,      
+        symbolCooldownMs: 15000,     
+        minSamples: 10,              
       },
       normal: {
-        label: "Normal hybrid scalper",
-        zBuyThreshold: -0.8,
-        zSellThreshold: 1.0,
+        label: "Normal micro-scalper",
+        zBuyThreshold: -2.0,
+        zSellThreshold: 0.8,
         signalBlockConfidence: 70,
         signalBoostConfidence: 75,
         tradeSizePct: 0.02,
@@ -56,33 +49,33 @@ class TraderBot {
         maxExposurePct: 0.35,
         reservePct: 0.40,
         minHoldMs: 15000,
-        scratchTimeoutMs: 35000,
-        maxHoldMs: 150000,
+        scratchTimeoutMs: 240000,    // 4 minutes
+        maxHoldMs: 480000,           // 8 minutes
         hardStopPct: 0.30,
-        profitTargetPct: 0.18,
-        trailTriggerPct: 0.12,
-        trailDistancePct: 0.06,
+        profitTargetPct: 0.06,
+        trailTriggerPct: 0.03,
+        trailDistancePct: 0.015,
         globalCooldownMs: 2000,
         symbolCooldownMs: 10000,
         minSamples: 8,
       },
       aggressive: {
-        label: "Aggressive momentum scalper",
-        zBuyThreshold: -0.5,         // Less picky — buys smaller dips
-        zSellThreshold: 1.2,
-        signalBlockConfidence: 75,    // More tolerant of sell signals
+        label: "Aggressive micro-scalper",
+        zBuyThreshold: -1.5,         
+        zSellThreshold: 1.0,
+        signalBlockConfidence: 75,    
         signalBoostConfidence: 60,
-        tradeSizePct: 0.025,          // 2.5% per trade
+        tradeSizePct: 0.025,          
         maxPositionPct: 0.08,
         maxExposurePct: 0.45,
         reservePct: 0.30,
         minHoldMs: 10000,
-        scratchTimeoutMs: 25000,
-        maxHoldMs: 120000,
-        hardStopPct: 0.40,
-        profitTargetPct: 0.22,
-        trailTriggerPct: 0.14,
-        trailDistancePct: 0.08,
+        scratchTimeoutMs: 180000,    // 3 minutes
+        maxHoldMs: 360000,           // 6 minutes
+        hardStopPct: 0.30,
+        profitTargetPct: 0.08,
+        trailTriggerPct: 0.04,
+        trailDistancePct: 0.02,
         globalCooldownMs: 1000,
         symbolCooldownMs: 6000,
         minSamples: 6,
@@ -323,7 +316,7 @@ class TraderBot {
     // 6. Adverse signal while in profit — don't let winners become losers
     const signalAction = String(context.signalAction || "").toLowerCase();
     const signalConf = Number(context.signalConfidence || 50);
-    if (pnl > 0.03 && signalAction === "sell" && signalConf >= 70) {
+    if (pnl > 0.01 && signalAction === "sell" && signalConf >= 70) {
       return this.buildDecision("LOCK PROFIT", context, { ...meta, exitCause: "adverse signal while green", sellFraction: 1 });
     }
 
