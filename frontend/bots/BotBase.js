@@ -26,6 +26,11 @@ class TraderBot {
     const pressure = clamp(drawdownPct / 8, 0, 1);
     const learningBias = ((performance.winRate - 0.5) * 0.12) + (performance.realizedBias / 80);
     const lateCaution = timing.phase === "exit" ? 0.18 : timing.phase === "manage" ? 0.06 : 0;
+    
+    // Professional Trader Upgrade: Drawdown Exponential Risk Scaling
+    // If the bot is in a drawdown, exponentially decay maxPosition and riskTolerance
+    const drawdownPenalty = drawdownPct > 0 ? Math.pow(drawdownPct, 1.25) / 100 : 0;
+    
     const tempo = this.getTempo();
     const deploymentAllowance = timing.phase === "observe" || timing.phase === "exit"
     ? (timing.phase === "exit" ? 0 : clamp(tempo.firstEntryScale * 0.45, 0.08, 0.32))
@@ -38,8 +43,9 @@ class TraderBot {
       drawdownPct,
       performance,
       deploymentAllowance,
-      convictionDemand: clamp(def.convictionBias + pressure * 0.14 - learningBias + lateCaution, 0.24, 0.9),
-      riskTolerance: clamp(def.riskAppetite - pressure * (0.36 - def.riskAppetite * 0.16) + learningBias - lateCaution, 0.14, 0.92),
+      maxPosition: clamp(def.maxPosition - drawdownPenalty * 0.5, 0.02, 1.0),
+      convictionDemand: clamp(def.convictionBias + pressure * 0.14 - learningBias + lateCaution + drawdownPenalty, 0.24, 0.95),
+      riskTolerance: clamp(def.riskAppetite - pressure * 0.16 + learningBias * 1.5 - drawdownPenalty * 1.5, 0.05, 0.95),
       patienceLevel: clamp(def.patience + pressure * 0.18 + lateCaution - timing.activeProgress * def.riskAppetite * 0.08, 0.14, 0.94),
     };
   }
@@ -103,11 +109,14 @@ class TraderBot {
     const timing = profile.timing;
     if (timing.phase === "exit") return 0;
     if (!this.tradeCooldownReady(context.symbol, profile)) return 0;
-    const conviction = clamp(
-      (edge - requiredEdge + (this.mode === "aggressive" ? 26 : 18)) / (this.mode === "aggressive" ? 42 : this.mode === "calm" ? 76 : 60),
-      0,
-      this.mode === "aggressive" ? 1.22 : 1.08,
-    );
+    
+    // Professional Trader Upgrade: Simplified Half-Kelly Criterion
+    // f* = (Edge / Odds). We proxy odds with volatility, and scale by winRate.
+    const winRate = clamp(profile.performance.winRate, 0.3, 0.7);
+    const winEdge = Math.max(0, edge - requiredEdge + 5); 
+    const kellyFraction = clamp((winRate * winEdge) / Math.max(1.0, context.volatilityPct * 100), 0.01, 1.0) * 0.5; // Half-Kelly
+    
+    const conviction = clamp(kellyFraction * (this.mode === "aggressive" ? 2.5 : this.mode === "calm" ? 0.8 : 1.5), 0, this.mode === "aggressive" ? 1.25 : 1.0);
     const exposureCap = snapshot.capital * profile.maxExposure * profile.deploymentAllowance;
     const currentValue = botHeldQuantity(this.mode, context.symbol) * context.price;
     const positionCap = snapshot.capital * profile.maxPosition * profile.deploymentAllowance;
@@ -122,16 +131,30 @@ class TraderBot {
   brainFor(context, profile, snapshot) {
     const ready = context.samples >= this.observationNeed(profile);
     const acceleration = context.shortMomentumPct - context.noisePct * (this.mode === "aggressive" ? 0.08 : this.mode === "calm" ? 0.28 : 0.18);
-    const reversalPenalty = Math.max(0, -context.shortMomentumPct) * (this.mode === "calm" ? 10 : this.mode === "aggressive" ? 4.5 : 6.5);
-    const personalityLift = this.mode === "aggressive" ? 7 : this.mode === "calm" ? -5 : 0;
+    const personalityLift = this.mode === "aggressive" ? 6 : this.mode === "calm" ? -2 : 2;
     const liveTape = context.shortMomentumPct - context.noisePct * (this.mode === "aggressive" ? 0.04 : this.mode === "calm" ? 0.22 : 0.12);
-    const tapePenalty = liveTape < 0 ? Math.abs(liveTape) * (this.mode === "aggressive" ? 18 : this.mode === "calm" ? 42 : 28) : 0;
+    const tapePenalty = liveTape < 0 ? Math.abs(liveTape) * (this.mode === "calm" ? 28 : this.mode === "aggressive" ? 14 : 20) : 0;
+    const reversalPenalty = context.shortMomentumPct < -context.noisePct ? 8 : 0;
+    
+    // Professional Trader Upgrade: Mean Reversion vs Trend Following
+    let rsiAdjustment = 0;
+    if (this.mode === "calm") {
+      // Mean Reversion: Buy when oversold (RSI < 40) and avoid overbought
+      if (context.rsiProxy < 40) rsiAdjustment = (40 - context.rsiProxy) * 0.6;
+      else if (context.rsiProxy > 70) rsiAdjustment = (70 - context.rsiProxy) * 0.8;
+    } else if (this.mode === "aggressive") {
+      // Trend Following: Buy breakouts (RSI > 55) and avoid weak momentum
+      if (context.rsiProxy > 55) rsiAdjustment = (context.rsiProxy - 55) * 0.5;
+      else if (context.rsiProxy < 45) rsiAdjustment = (context.rsiProxy - 45) * 0.7;
+    }
+
     const confidence = clamp(
       40 + personalityLift
       + context.trendQuality * (this.mode === "aggressive" ? 1.28 : this.mode === "calm" ? 0.68 : 0.94)
       + context.agreement * (this.mode === "calm" ? 20 : this.mode === "aggressive" ? 10 : 14)
       + Math.max(0, acceleration) * (this.mode === "aggressive" ? 18 : this.mode === "calm" ? 5 : 9)
       + profile.performance.realizedBias * 0.7
+      + rsiAdjustment
       - profile.convictionDemand * (this.mode === "calm" ? 9 : 3.5)
       - tapePenalty,
       0,
@@ -169,12 +192,19 @@ class TraderBot {
       const softLoss = this.mode === "calm" ? -2.0 : this.mode === "aggressive" ? -5.0 : -3.5;
       const profitEnough = context.pnlPct >= scalpTarget && (profile.timing.phase === "manage" || edge < requiredEdge + 3 || heldMs >= maxHoldMs * 0.55);
 
+      // Professional Trader Upgrade: Dynamic Trailing Stop
+      // If we are in significant profit, lock in profits with a trailing stop.
+      const trailTriggerPct = this.mode === "aggressive" ? 0.8 : this.mode === "calm" ? 0.4 : 0.6;
+      const trailDistancePct = this.mode === "aggressive" ? 1.0 : this.mode === "calm" ? 0.4 : 0.6;
+      const trailingStopHit = context.highWaterPrice > 0 && ((context.highWaterPrice - context.entry) / context.entry) * 100 >= trailTriggerPct && context.drawdownFromHighPct >= trailDistancePct;
+
       if (profile.timing.phase === "exit") {
         const urgency = clamp(1 - (profile.timing.remainingMs / Math.max(1, profile.timing.exitMs)), 0, 1);
         return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "window closing" });
       }
       
       // Changed to fully EXIT position for these terminal states to prevent fractional selling loops
+      if (trailingStopHit) return this.buildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "trailing stop hit" });
       if (context.pnlPct <= -holdDecision.stopLossPct) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "stop loss" });
       if (context.pnlPct <= softLoss && edge < requiredEdge) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "loss not recovering" });
       if (lateFailure) return this.buildDecision("EXIT", context, profile, confidence, risk, 0, 1, { ...meta, exitCause: "thesis failed" });

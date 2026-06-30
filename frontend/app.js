@@ -1152,12 +1152,24 @@ function botHistoryStats(history, price) {
   const variance = returns.length ? returns.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / returns.length : 0;
   const volatilityPct = clamp(Math.sqrt(variance), 0.08, 7);
   const noisePct = clamp(volatilityPct - Math.abs(mean), 0, 7);
+  
+  // Professional Trader Upgrade: Pseudo RSI calculation
+  let gains = 0;
+  let losses = 0;
+  returns.forEach(ret => {
+    if (ret > 0) gains += ret;
+    else losses += Math.abs(ret);
+  });
+  const rs = losses === 0 ? 100 : gains / losses;
+  const rsiProxy = returns.length > 0 ? 100 - (100 / (1 + rs)) : 50;
+  
   return {
     samples,
     momentumPct: first ? ((price - first) / first) * 100 : 0,
     shortMomentumPct: pivot ? ((price - pivot) / pivot) * 100 : 0,
     volatilityPct,
     noisePct,
+    rsiProxy,
     supportDistancePct: low ? ((price - low) / low) * 100 : 0,
     resistanceDistancePct: high ? ((high - price) / price) * 100 : 0,
   };
@@ -1186,6 +1198,19 @@ function analyzeBotSymbol(mode, quote) {
   const changePercent = Number(quote.changePercent ?? quote.change_percent ?? 0);
   const dayRangePct = quote.high && quote.low ? ((quote.high - quote.low) / price) * 100 : 0;
   const pnlPct = heldQty && entry ? ((price - entry) / entry) * 100 : 0;
+  
+  // Track High Water Mark for Trailing Stops
+  let highWaterPrice = 0;
+  let drawdownFromHighPct = 0;
+  if (heldQty > 0) {
+    const pos = botState.modes[mode].positions[quote.symbol];
+    if (pos) {
+      if (!pos.highWaterPrice || price > pos.highWaterPrice) pos.highWaterPrice = price;
+      highWaterPrice = pos.highWaterPrice;
+      drawdownFromHighPct = ((highWaterPrice - price) / highWaterPrice) * 100;
+    }
+  }
+
   const signalConfidence = Number(signal?.confidence || 50);
   const signalAction = signal?.action || "Hold";
   const context = {
@@ -1198,6 +1223,8 @@ function analyzeBotSymbol(mode, quote) {
     heldQty,
     entry,
     pnlPct,
+    highWaterPrice,
+    drawdownFromHighPct,
     openedAt: botState.modes[mode].positions[quote.symbol]?.openedAt || 0,
     ...stats,
   };
