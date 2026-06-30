@@ -68,10 +68,10 @@ class TraderBot {
   buildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0, meta = {}) {
     const volatility = Math.max(0.25, context.volatilityPct);
     
-    // Professional Trader Upgrade: Wide realistic crypto targets
-    // Crypto moves 1-2% very easily. Stop losses and targets must accommodate this.
-    const stopBase = (this.mode === "calm" ? 1.0 : this.mode === "aggressive" ? 3.0 : 2.0) + volatility * (0.5 + profile.riskTolerance * 0.5);
-    const targetBase = (this.mode === "calm" ? 0.8 : this.mode === "aggressive" ? 2.5 : 1.5) + volatility * (0.5 + profile.riskTolerance * 0.5) + Math.max(0, confidence - 64) * 0.02;
+    // High-Frequency Scalping Upgrade: Micro targets
+    // We only have 30 minutes, so we must hunt for tiny scalps (0.2% - 0.4%)
+    const stopBase = (this.mode === "calm" ? 0.3 : this.mode === "aggressive" ? 0.6 : 0.4) + volatility * (0.2 + profile.riskTolerance * 0.2);
+    const targetBase = (this.mode === "calm" ? 0.2 : this.mode === "aggressive" ? 0.4 : 0.3) + volatility * (0.2 + profile.riskTolerance * 0.2) + Math.max(0, confidence - 64) * 0.01;
     
     return {
       action,
@@ -86,8 +86,8 @@ class TraderBot {
       conviction: profile.convictionDemand,
       notional,
       sellFraction,
-      stopLossPct: clamp(stopBase, this.mode === "calm" ? 0.8 : 1.5, this.mode === "aggressive" ? 6.0 : 4.0),
-      takeProfitPct: clamp(targetBase, this.mode === "calm" ? 0.6 : 1.2, this.mode === "calm" ? 3.0 : this.mode === "aggressive" ? 8.0 : 5.0),
+      stopLossPct: clamp(stopBase, this.mode === "calm" ? 0.25 : 0.4, this.mode === "aggressive" ? 1.0 : 0.8),
+      takeProfitPct: clamp(targetBase, this.mode === "calm" ? 0.15 : 0.2, this.mode === "calm" ? 0.5 : this.mode === "aggressive" ? 1.5 : 1.0),
       ...meta,
     };
   }
@@ -181,25 +181,26 @@ class TraderBot {
 
     if (context.heldQty > 0) {
       const heldMs = Date.now() - (context.openedAt || Date.now());
-      // Give trades some breathing room (e.g. at least 30s-120s)
-      const minHoldMs = this.mode === "calm" ? 120000 : this.mode === "aggressive" ? 30000 : 60000;
+      // Give trades some breathing room (e.g. at least 15s-45s)
+      const minHoldMs = this.mode === "calm" ? 45000 : this.mode === "aggressive" ? 15000 : 30000;
       const thesisFailed = context.shortMomentumPct < -Math.max(0.4, context.noisePct * (this.mode === "aggressive" ? 1.8 : 2.8)) && context.agreement < (this.mode === "calm" ? -0.2 : -0.4);
       const lateFailure = context.pnlPct < 0 && thesisFailed && heldMs >= minHoldMs;
-      // Realistic percentage target (1.0 = 1%)
-      const scalpTarget = this.mode === "calm" ? 0.75 : this.mode === "aggressive" ? 2.5 : 1.25;
+      
+      // High-Frequency Scalping Upgrade: Micro scalp targets
+      const scalpTarget = this.mode === "calm" ? 0.20 : this.mode === "aggressive" ? 0.40 : 0.25;
       const scalpFade = context.pnlPct >= (scalpTarget * 0.8) && heldMs >= minHoldMs && context.shortMomentumPct < context.noisePct * (this.mode === "aggressive" ? 0.16 : 0.08);
-      // Realistic maximum hold times: 5, 15, and 30 minutes
-      const maxHoldMs = this.mode === "aggressive" ? 300000 : this.mode === "calm" ? 1800000 : 900000;
+      
+      // Micro hold times: 1 min, 2 mins, 3 mins max
+      const maxHoldMs = this.mode === "aggressive" ? 60000 : this.mode === "calm" ? 180000 : 120000;
       // Only trigger a time stop if the position is not in profit
       const timeStop = heldMs >= maxHoldMs && context.pnlPct <= 0;
       // Realistic soft loss thresholds
-      const softLoss = this.mode === "calm" ? -2.0 : this.mode === "aggressive" ? -5.0 : -3.5;
+      const softLoss = this.mode === "calm" ? -0.6 : this.mode === "aggressive" ? -1.5 : -1.0;
       const profitEnough = context.pnlPct >= scalpTarget && (profile.timing.phase === "manage" || edge < requiredEdge + 3 || heldMs >= maxHoldMs * 0.55);
 
-      // Professional Trader Upgrade: Dynamic Trailing Stop
-      // If we are in significant profit, lock in profits with a trailing stop.
-      const trailTriggerPct = this.mode === "aggressive" ? 0.8 : this.mode === "calm" ? 0.4 : 0.6;
-      const trailDistancePct = this.mode === "aggressive" ? 1.0 : this.mode === "calm" ? 0.4 : 0.6;
+      // High-Frequency Scalping Upgrade: Hair-trigger dynamic trailing stops
+      const trailTriggerPct = this.mode === "aggressive" ? 0.25 : this.mode === "calm" ? 0.15 : 0.20;
+      const trailDistancePct = this.mode === "aggressive" ? 0.10 : this.mode === "calm" ? 0.05 : 0.08;
       const trailingStopHit = context.highWaterPrice > 0 && ((context.highWaterPrice - context.entry) / context.entry) * 100 >= trailTriggerPct && context.drawdownFromHighPct >= trailDistancePct;
 
       if (profile.timing.phase === "exit") {
