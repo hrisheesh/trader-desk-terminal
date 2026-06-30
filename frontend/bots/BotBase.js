@@ -19,6 +19,7 @@ class TraderBot {
     const traits = {
       calm: {
         label: "Calm micro-scalper",
+        strategy: "value",
         zBuyThreshold: -2.5,        // Extreme dip
         zSellThreshold: 0.5,        
         signalBlockConfidence: 65,   
@@ -40,6 +41,7 @@ class TraderBot {
       },
       normal: {
         label: "Normal micro-scalper",
+        strategy: "pullback",
         zBuyThreshold: -2.0,
         zSellThreshold: 0.8,
         signalBlockConfidence: 70,
@@ -61,6 +63,7 @@ class TraderBot {
       },
       aggressive: {
         label: "Aggressive micro-scalper",
+        strategy: "momentum",
         zBuyThreshold: -1.5,         
         zSellThreshold: 1.0,
         signalBlockConfidence: 75,    
@@ -159,8 +162,7 @@ class TraderBot {
     return 0;
   }
 
-  // ─── Z-Score Entry Quality ────────────────────────────────────────────
-  // The core HFT signal: Is this coin statistically cheap right now?
+  // ─── Entry Quality by Strategy ──────────────────────────────────────────
   entryQuality(context) {
     const traits = this.traits();
     const z = Number(context.zScore || 0);
@@ -168,32 +170,58 @@ class TraderBot {
     const noise = Math.max(0.01, Number(context.noisePct || 0));
     const rsi = Number(context.rsiProxy || 50);
 
-    // Z-Score is the primary signal
-    // Negative Z = price below mean = potential buy
-    const zSignal = -z; // Flip sign: positive zSignal = good buy opportunity
+    let score = 0;
+    let isBuyZone = false;
+    let setupType = "unknown";
+    let blockReason = "";
 
-    // Momentum confirmation: We want to buy when price is dipping but not crashing
-    // A gentle dip (momentum slightly negative) is ideal for mean reversion
-    const momentumQuality = momentum < 0 && momentum > -0.5 ? 15 : // Gentle dip — ideal
-                            momentum > 0.05 ? 8 :                    // Slight uptick — recovery
-                            momentum < -0.5 ? -10 : 0;               // Crash — avoid
-
-    // RSI confirmation
-    const rsiBonus = rsi < 35 ? 12 :   // Oversold — strong buy
-                     rsi < 45 ? 6 :     // Leaning oversold
-                     rsi > 65 ? -8 :    // Overbought — avoid buying
-                     rsi > 55 ? -3 : 0; // Leaning overbought
-
-    // Noise penalty — noisy markets are harder to scalp
+    // Noise penalty applies to all
     const noisePenalty = noise > 0.5 ? (noise - 0.5) * 20 : 0;
 
-    const score = zSignal * 25 + momentumQuality + rsiBonus + this.signalBonus(context) - noisePenalty;
+    if (traits.strategy === "value") {
+      // CALM: Deep Mean Reversion
+      setupType = "deep value dip";
+      if (z <= traits.zBuyThreshold) {
+        isBuyZone = true;
+        // The deeper the dip, the better
+        score = Math.abs(z) * 15; 
+        if (rsi < 35) score += 15;
+      } else {
+        blockReason = `Z=${z.toFixed(2)} > threshold ${traits.zBuyThreshold}`;
+      }
+
+    } else if (traits.strategy === "pullback") {
+      // NORMAL: Trend-Aligned Pullbacks
+      setupType = "trend pullback";
+      if (z <= traits.zBuyThreshold && momentum > -0.2) {
+        isBuyZone = true;
+        score = Math.abs(z) * 10 + (momentum > 0 ? 10 : 0);
+      } else {
+        blockReason = z > traits.zBuyThreshold ? `Z=${z.toFixed(2)} not in dip` : `momentum ${momentum.toFixed(2)} too weak`;
+      }
+
+    } else if (traits.strategy === "momentum") {
+      // AGGRESSIVE: Fast Breakout / Momentum
+      setupType = "momentum breakout";
+      // We want POSITIVE z-score (breaking up) and POSITIVE momentum
+      if (z >= 1.0 && momentum > 0.05) {
+        isBuyZone = true;
+        score = (z * 10) + (momentum * 50); // Heavily weight momentum
+        if (rsi > 55 && rsi < 75) score += 10; // Riding the wave
+      } else {
+        blockReason = z < 1.0 ? `Z=${z.toFixed(2)} < 1.0 (no breakout)` : `momentum ${momentum.toFixed(2)} < 0.05`;
+      }
+    }
+
+    score += this.signalBonus(context) - noisePenalty;
     
     return {
       score,
       zScore: z,
-      zSignal,
-      isBuyZone: z <= traits.zBuyThreshold,
+      zSignal: -z,
+      isBuyZone,
+      setupType,
+      blockReason,
       momentum,
       rsi,
       noise,
@@ -219,7 +247,7 @@ class TraderBot {
     const currentValue = botHeldQuantity(this.mode, context.symbol) * context.price;
     const positionRoom = Math.max(0, capital * traits.maxPositionPct - currentValue);
     const exposureRoom = Math.max(0, capital * traits.maxExposurePct - snapshot.openValue);
-    const cashRoom = Math.max(0, snapshot.cash - capital * (1 - traits.reservePct));
+    const cashRoom = Math.max(0, snapshot.cash - capital * traits.reservePct);
     
     notional = Math.min(notional, positionRoom, exposureRoom, cashRoom, snapshot.cash);
     
@@ -320,6 +348,12 @@ class TraderBot {
       return this.buildDecision("LOCK PROFIT", context, { ...meta, exitCause: "adverse signal while green", sellFraction: 1 });
     }
 
+    // 6.5 Momentum Strategy specific exit - cut if momentum stalls
+    const momentum = Number(context.shortMomentumPct || 0);
+    if (traits.strategy === "momentum" && heldMs > 15000 && momentum < 0.0) {
+      return this.buildDecision("EXIT", context, { ...meta, exitCause: "momentum stalled", sellFraction: 1 });
+    }
+
     // 7. Scratch timeout — if trade is flat after scratch period, dump it
     if (heldMs >= traits.scratchTimeoutMs && pnl < traits.profitTargetPct * 0.4) {
       return this.buildDecision("EXIT", context, { ...meta, exitCause: "scratch timeout", sellFraction: 1 });
@@ -403,16 +437,13 @@ class TraderBot {
     meta.risk = risk;
     meta.edge = edge;
     meta.requiredEdge = requiredEdge;
-    meta.setupType = quality.isBuyZone ? "z-score dip buy" : "momentum scalp";
+    meta.setupType = quality.setupType;
 
     // ── Entry gates ──
     
-    // Z-Score must be in buy zone OR momentum must be strongly positive
-    const zOk = quality.isBuyZone;
-    const momentumOk = quality.momentum > 0.05 && quality.rsi < 55;
-    
-    if (!zOk && !momentumOk) {
-      return this.buildDecision("WATCH", context, { ...meta, blockedBy: `Z=${quality.zScore.toFixed(2)} not in buy zone (need <${traits.zBuyThreshold})` });
+    // Strategy-specific entry gate
+    if (!quality.isBuyZone) {
+      return this.buildDecision("WATCH", context, { ...meta, blockedBy: quality.blockReason });
     }
 
     // Edge must clear the bar
