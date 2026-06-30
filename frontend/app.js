@@ -236,6 +236,11 @@ const BOT_MODES = {
     convictionBias: 0.72,
     maxExposure: 0.46,
     maxPosition: 0.18,
+    stopLossBase: 0.8,
+    stopLossVol: 0.4,
+    takeProfitBase: 1.5,
+    takeProfitVol: 0.8,
+    signalBias: 0.4,
   },
   normal: {
     label: "Normal",
@@ -246,6 +251,11 @@ const BOT_MODES = {
     convictionBias: 0.52,
     maxExposure: 0.78,
     maxPosition: 0.36,
+    stopLossBase: 1.2,
+    stopLossVol: 0.6,
+    takeProfitBase: 2.2,
+    takeProfitVol: 1.2,
+    signalBias: 0.6,
   },
   aggressive: {
     label: "Aggressive",
@@ -256,6 +266,11 @@ const BOT_MODES = {
     convictionBias: 0.26,
     maxExposure: 0.98,
     maxPosition: 0.72,
+    stopLossBase: 1.8,
+    stopLossVol: 1.0,
+    takeProfitBase: 3.5,
+    takeProfitVol: 1.8,
+    signalBias: 0.8,
   },
 };
 const defaultBotConfig = {

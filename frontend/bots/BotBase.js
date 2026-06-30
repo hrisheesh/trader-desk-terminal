@@ -160,11 +160,11 @@ class TraderBot {
       const lateFailure = context.pnlPct < 0 && thesisFailed && heldMs >= minHoldMs;
       // Realistic percentage target (1.0 = 1%)
       const scalpTarget = this.mode === "calm" ? 0.75 : this.mode === "aggressive" ? 2.5 : 1.25;
-      const scalpFade = context.pnlPct >= scalpTarget && heldMs >= minHoldMs && context.shortMomentumPct < context.noisePct * (this.mode === "aggressive" ? 0.16 : 0.08);
+      const scalpFade = context.pnlPct >= (scalpTarget * 0.8) && heldMs >= minHoldMs && context.shortMomentumPct < context.noisePct * (this.mode === "aggressive" ? 0.16 : 0.08);
       // Realistic maximum hold times: 5, 15, and 30 minutes
       const maxHoldMs = this.mode === "aggressive" ? 300000 : this.mode === "calm" ? 1800000 : 900000;
-      // Realistic PNL threshold to prevent a time stop
-      const timeStop = heldMs >= maxHoldMs && context.pnlPct < (this.mode === "aggressive" ? 0.5 : 0.25);
+      // Only trigger a time stop if the position is not in profit
+      const timeStop = heldMs >= maxHoldMs && context.pnlPct <= 0;
       // Realistic soft loss thresholds
       const softLoss = this.mode === "calm" ? -2.0 : this.mode === "aggressive" ? -5.0 : -3.5;
       const profitEnough = context.pnlPct >= scalpTarget && (profile.timing.phase === "manage" || edge < requiredEdge + 3 || heldMs >= maxHoldMs * 0.55);
