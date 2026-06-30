@@ -22,14 +22,71 @@ const VISIBLE_BARS = { "1m": 80, "5m": 84, "15m": 80, "1h": 72, "6h": 60, "1d": 
 
 let apiBase = API_CANDIDATES[0];
 const DEFAULT_SYMBOLS = ["NVDA", "AAPL", "TSLA", "MSFT", "BTC-USD", "ETH-USD", "SOXL", "SPY"];
-let savedWatchlist = (() => {
+let watchlists = (() => {
   try {
-    const data = JSON.parse(localStorage.getItem("trader-desk-watchlist"));
-    return Array.isArray(data) && data.length > 0 ? data : DEFAULT_SYMBOLS;
-  } catch (e) {
-    return DEFAULT_SYMBOLS;
-  }
+    const data = JSON.parse(localStorage.getItem("trader-desk-watchlists"));
+    if (data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length > 0) {
+      return data;
+    }
+  } catch(e) {}
+  
+  // Migration from old flat array
+  try {
+    const oldData = JSON.parse(localStorage.getItem("trader-desk-watchlist"));
+    if (Array.isArray(oldData) && oldData.length > 0) {
+      return { "My Watchlist": oldData };
+    }
+  } catch(e) {}
+  
+  return { "My Watchlist": DEFAULT_SYMBOLS };
 })();
+
+let activeWatchlistName = (() => {
+  const saved = localStorage.getItem("trader-desk-active-watchlist");
+  return (saved && watchlists[saved]) ? saved : Object.keys(watchlists)[0];
+})();
+
+let savedWatchlist = watchlists[activeWatchlistName];
+
+const GLOBAL_MARKETS = [
+  { name: "US Markets", tz: "America/New_York", open: "09:30", close: "16:00", symbols: ["AAPL", "MSFT", "NVDA", "SPY", "QQQ"] },
+  { name: "China (SSE)", tz: "Asia/Shanghai", open: "09:30", close: "15:00", symbols: ["BABA", "TCEHY", "BIDU"] },
+  { name: "Japan (TSE)", tz: "Asia/Tokyo", open: "09:00", close: "15:00", symbols: ["TM", "SONY", "HMC"] },
+  { name: "Europe (Euronext)", tz: "Europe/Paris", open: "09:00", close: "17:30", symbols: ["ASML", "LVMUY", "SAP"] },
+  { name: "Hong Kong (HKEX)", tz: "Asia/Hong_Kong", open: "09:30", close: "16:00", symbols: ["0700.HK", "9988.HK", "3690.HK"] },
+  { name: "India (NSE/BSE)", tz: "Asia/Kolkata", open: "09:15", close: "15:30", symbols: ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"] },
+  { name: "UK (LSE)", tz: "Europe/London", open: "08:00", close: "16:30", symbols: ["SHEL", "ASTL", "HSBC"] },
+  { name: "Canada (TSX)", tz: "America/Toronto", open: "09:30", close: "16:00", symbols: ["RY", "TD", "SHOP"] },
+  { name: "Saudi Arabia (Tadawul)", tz: "Asia/Riyadh", open: "10:00", close: "15:00", symbols: ["2222.SR", "1120.SR", "2010.SR"] },
+  { name: "Switzerland (SIX)", tz: "Europe/Zurich", open: "09:00", close: "17:30", symbols: ["NSRGY", "ROG.SW", "NOVN.SW"] },
+  { name: "Crypto 24/7", tz: "UTC", open: "00:00", close: "23:59", symbols: ["BTC-USD", "ETH-USD", "SOL-USD"] }
+];
+
+function isMarketOpen(market) {
+  if (market.name === "Crypto 24/7") return true;
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: market.tz,
+      hour: 'numeric', minute: 'numeric', hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(new Date());
+    const h = parts.find(p => p.type === 'hour').value.padStart(2, '0');
+    const m = parts.find(p => p.type === 'minute').value.padStart(2, '0');
+    const time = `${h}:${m}`;
+    return time >= market.open && time <= market.close;
+  } catch(e) {
+    return false;
+  }
+}
+
+function getMarketWatchlists() {
+  const result = {};
+  for (const m of GLOBAL_MARKETS) {
+    const status = isMarketOpen(m) ? "🟢 Live" : "🔴 Closed";
+    result[`${m.name} (${status})`] = m.symbols;
+  }
+  return result;
+}
 let savedHistory = (() => {
   try {
     const data = JSON.parse(localStorage.getItem("trader-desk-history"));
@@ -107,6 +164,10 @@ let lastPanX = 0;
 const els = {
   command: document.querySelector("#command-input"),
   watchlist: document.querySelector("#watchlist"),
+  watchlistSelector: document.querySelector("#watchlist-selector"),
+  watchlistAdd: document.querySelector("#watchlist-add"),
+  watchlistRename: document.querySelector("#watchlist-rename"),
+  watchlistDelete: document.querySelector("#watchlist-delete"),
   refresh: document.querySelector("#refresh-button"),
   marketState: document.querySelector("#market-state"),
   clock: document.querySelector("#desk-clock"),
@@ -220,9 +281,11 @@ let ticketOrderType = "market";
 const BOT_CONFIG_KEY = "trader-desk-bot-config-v3";
 const BOT_STATE_KEY = "trader-desk-bot-state-v4";
 const BOT_RUNS_KEY = "trader-desk-bot-runs-v1";
-const BOT_PRICE_MEMORY_LIMIT = 28;
-const BOT_MIN_TRADE_NOTIONAL = 1;
+const BOT_PRICE_MEMORY_LIMIT = 200; // 100 seconds at 500ms ticks
+const BOT_MIN_TRADE_NOTIONAL = 10;  // $10 minimum trade
 const BOT_TICK_MS = 500;
+const BOT_FEE_RATE = 0.001; // 0.1% per side (maker/taker average)
+const BOT_STALE_TICK_LIMIT = 20; // Skip symbols with no price change for 20+ ticks
 const BOT_FULLY_DEPLOYED_LOG_MS = 10000;
 const BOT_RUN_HISTORY_LIMIT = 20;
 const BOT_RUN_AUDIT_LIMIT = 12000;
@@ -320,7 +383,9 @@ return [];
 })();
 let activeBotRun = null;
 function updateStorage() {
-  localStorage.setItem("trader-desk-watchlist", JSON.stringify(savedWatchlist));
+  watchlists[activeWatchlistName] = savedWatchlist;
+  localStorage.setItem("trader-desk-watchlists", JSON.stringify(watchlists));
+  localStorage.setItem("trader-desk-active-watchlist", activeWatchlistName);
   localStorage.setItem("trader-desk-history", JSON.stringify(savedHistory));
   localStorage.setItem("trader-desk-portfolio", JSON.stringify(savedPortfolio));
 localStorage.setItem("trader-desk-trade-history", JSON.stringify(tradeHistory));
@@ -534,7 +599,7 @@ function botInputFor(mode) {
 
 function readBotConfig() {
   const duration = Number(document.querySelector("#bot-duration")?.value);
-  const universeMode = els.botUniverseMode?.value === "crypto" ? "crypto" : "watchlist";
+  const universeMode = els.botUniverseMode?.value || "crypto";
   const modes = {};
   botModeIds().forEach(mode => {
     const input = botInputFor(mode);
@@ -553,7 +618,10 @@ function readBotConfig() {
 function hydrateBotForm() {
 const duration = document.querySelector("#bot-duration");
 if (duration) duration.value = botConfig.durationMin || defaultBotConfig.durationMin;
-if (els.botUniverseMode) els.botUniverseMode.value = botConfig.universeMode === "crypto" ? "crypto" : "watchlist";
+if (els.botUniverseMode) {
+  // Ensure the option exists before setting it, handled mostly in updateWatchlistUI, but safe to assign
+  els.botUniverseMode.value = botConfig.universeMode || "crypto";
+}
 botModeIds().forEach(mode => {
 const input = botInputFor(mode);
 if (input) input.value = botConfig.modes?.[mode]?.capital ?? BOT_MODES[mode].capital;
@@ -708,11 +776,16 @@ renderBotLog();
 }
 
 function botUniverseSymbols() {
-  return botConfig.universeMode === "crypto" ? BOT_CRYPTO_SYMBOLS : savedWatchlist;
+  if (botConfig.universeMode === "crypto") return BOT_CRYPTO_SYMBOLS;
+  const globalMarkets = getMarketWatchlists();
+  if (globalMarkets[botConfig.universeMode]) {
+    return globalMarkets[botConfig.universeMode];
+  }
+  return watchlists[botConfig.universeMode] || savedWatchlist;
 }
 
 function botUniverseLabel() {
-  return botConfig.universeMode === "crypto" ? "crypto universe" : "watchlist";
+  return botConfig.universeMode === "crypto" ? "crypto universe" : botConfig.universeMode;
 }
 
 function botCapital(mode) {
@@ -895,20 +968,22 @@ function logBotDecision(mode, row, options = {}) {
 function executeBotBuy(mode, candidate, notional, reason) {
   const state = botState.modes[mode];
   const snapshot = botPortfolioSnapshot(mode);
-  const minTrade = Math.min(BOT_MIN_TRADE_NOTIONAL, Math.max(0.25, snapshot.capital * 0.01));
+  const minTrade = Math.max(BOT_MIN_TRADE_NOTIONAL, snapshot.capital * 0.02);
   const cleanNotional = Math.min(notional, snapshot.cash);
   if (cleanNotional < minTrade || candidate.price <= 0) return false;
+  // Apply fee: fee is added to cost basis
+  const fee = cleanNotional * BOT_FEE_RATE;
   const qty = cleanNotional / candidate.price;
   const position = state.positions[candidate.symbol] || { qty: 0, avgPrice: 0, costBasis: 0, realized: 0, openedAt: Date.now() };
   position.qty = Number(position.qty || 0) + qty;
-  position.costBasis = Number(position.costBasis || 0) + cleanNotional;
+  position.costBasis = Number(position.costBasis || 0) + cleanNotional + fee; // Fee baked into cost
   position.avgPrice = position.qty > 0 ? position.costBasis / position.qty : 0;
   position.openedAt = position.openedAt || Date.now();
   position.updatedAt = Date.now();
   state.positions[candidate.symbol] = position;
   state.lastTradeAt[candidate.symbol] = Date.now();
-  botRecordTrade(mode, { side: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, reason });
-  logBotDecision(mode, { action: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, score: candidate.score, reason });
+  botRecordTrade(mode, { side: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, fee, reason });
+  logBotDecision(mode, { action: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, fee, score: candidate.score, reason });
   return true;
 }
 
@@ -920,8 +995,10 @@ function executeBotSell(mode, candidate, qty, reason) {
   if (sellQty <= 0 || candidate.price <= 0) return false;
   const avgPrice = Number(position.avgPrice || candidate.price);
   const notional = sellQty * candidate.price;
+  // Apply exit fee
+  const fee = notional * BOT_FEE_RATE;
   const costRemoved = sellQty * avgPrice;
-  const realized = notional - costRemoved;
+  const realized = notional - costRemoved - fee; // Fee subtracted from realized P&L
   position.qty = Math.max(0, Number(position.qty || 0) - sellQty);
   position.costBasis = Math.max(0, Number(position.costBasis || 0) - costRemoved);
   position.realized = Number(position.realized || 0) + realized;
@@ -930,8 +1007,8 @@ function executeBotSell(mode, candidate, qty, reason) {
   if (position.qty <= 0.000001) delete state.positions[candidate.symbol];
   else state.positions[candidate.symbol] = position;
   state.lastTradeAt[candidate.symbol] = Date.now();
-  botRecordTrade(mode, { side: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, pnl: realized, reason });
-  logBotDecision(mode, { action: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, pnl: realized, score: candidate.score, reason });
+  botRecordTrade(mode, { side: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, fee, pnl: realized, reason });
+  logBotDecision(mode, { action: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, fee, pnl: realized, score: candidate.score, reason });
   return true;
 }
 
@@ -1170,13 +1247,14 @@ function botHistoryStats(history, price) {
   });
   const rs = losses === 0 ? 100 : gains / losses;
   const rsiProxy = returns.length > 0 ? 100 - (100 / (1 + rs)) : 50;
-  
-  // HFT Core: Z-Score Mean Reversion
-  // Z = (Price - Mean) / StdDev
-  // Z < -1.5 = statistically oversold (BUY zone)
-  // Z > +1.5 = statistically overbought (SELL zone / take profit)
-  const priceMean = prices.reduce((s, p) => s + p, 0) / samples;
-  const priceVariance = prices.reduce((s, p) => s + ((p - priceMean) ** 2), 0) / samples;
+
+  // Z-Score Mean Reversion: how far is current price from recent mean?
+  // Z < -2 = statistically oversold (BUY zone)
+  // Z > 0 = price reverted to/above mean (EXIT zone)
+  // Use a subset of recent prices for more responsive stats
+  const zWindow = prices.slice(-Math.min(samples, 200));
+  const priceMean = zWindow.reduce((s, p) => s + p, 0) / zWindow.length;
+  const priceVariance = zWindow.reduce((s, p) => s + ((p - priceMean) ** 2), 0) / zWindow.length;
   const priceStdDev = Math.sqrt(priceVariance);
   const zScore = priceStdDev > 0 ? (price - priceMean) / priceStdDev : 0;
   
@@ -1208,9 +1286,19 @@ function botMarketAgreement(context) {
 
 function analyzeBotSymbol(mode, quote) {
   const price = Number(quote.price || 0);
-  if (!price) return null;
+  if (!price || price < 0.001) return null; // Filter broken quotes (e.g. UNI at $0.0002)
   rememberBotPrice(mode, quote.symbol, price);
   const history = botState.modes[mode].priceMemory[quote.symbol] || [];
+
+  // Filter stale data: skip if price hasn't changed in many ticks
+  if (history.length >= 2) {
+    let staleCount = 0;
+    for (let i = history.length - 1; i > 0; i -= 1) {
+      if (history[i].price === history[i - 1].price) staleCount += 1;
+      else break;
+    }
+    if (staleCount > BOT_STALE_TICK_LIMIT) return null; // Skip frozen quotes
+  }
   const stats = botHistoryStats(history, price);
   const signal = botSignalFor(quote.symbol);
   const heldQty = botHeldQuantity(mode, quote.symbol);
@@ -1441,8 +1529,8 @@ function runBotDecision() {
   }
   try {
     const universe = symbols
-      .map(symbol => quotes.find(quote => quote.symbol === symbol))
-      .filter(quote => quote && Number(quote.price || 0) > 0);
+        .map(symbol => quotes.find(quote => quote.symbol === symbol))
+        .filter(quote => quote && Number(quote.price || 0) > 0 && Number(quote.price || 0) >= 0.001);
     if (!universe.length) {
       botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: `waiting for live ${botUniverseLabel()} prices` }, { key: "no-prices", throttleMs: 5000 }));
       renderBotStatus();
@@ -2913,14 +3001,14 @@ async function runTerminalCommand(cmdStr) {
         if (!savedWatchlist.includes(sym)) savedWatchlist.push(sym);
         updateStorage();
         await loadDesk();
-        appendTerminalLine(`Added ${sym} to watchlist.`, "ok");
+        appendTerminalLine(`Added ${sym} to watchlist '${activeWatchlistName}'.`, "ok");
         return;
       }
       if (action === "remove") {
         savedWatchlist = savedWatchlist.filter(item => item !== sym);
         updateStorage();
         await loadDesk();
-        appendTerminalLine(`Removed ${sym} from watchlist.`, "ok");
+        appendTerminalLine(`Removed ${sym} from watchlist '${activeWatchlistName}'.`, "ok");
         return;
       }
       appendTerminalLine("Usage: /watch add|remove|list [SYMBOL]", "warn");
@@ -3070,6 +3158,154 @@ document.addEventListener("keydown", (event) => {
   els.command.focus();
 });
 
+// --- Watchlist Manager ---
+function updateWatchlistUI() {
+  const customNames = Object.keys(watchlists);
+  const globalMarkets = getMarketWatchlists();
+  const globalNames = Object.keys(globalMarkets);
+  
+  if (els.watchlistSelector) {
+    els.watchlistSelector.innerHTML = '';
+    
+    const customGroup = document.createElement("optgroup");
+    customGroup.label = "My Watchlists";
+    for (const name of customNames) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      customGroup.appendChild(option);
+    }
+    els.watchlistSelector.appendChild(customGroup);
+    
+    const globalGroup = document.createElement("optgroup");
+    globalGroup.label = "Global Markets";
+    for (const name of globalNames) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      globalGroup.appendChild(option);
+    }
+    els.watchlistSelector.appendChild(globalGroup);
+    
+    els.watchlistSelector.value = activeWatchlistName;
+  }
+  
+  if (els.botUniverseMode) {
+    const currentVal = els.botUniverseMode.value;
+    els.botUniverseMode.innerHTML = '';
+    
+    const customGroup = document.createElement("optgroup");
+    customGroup.label = "My Watchlists";
+    for (const name of customNames) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      customGroup.appendChild(option);
+    }
+    els.botUniverseMode.appendChild(customGroup);
+    
+    const globalGroup = document.createElement("optgroup");
+    globalGroup.label = "Global Markets";
+    for (const name of globalNames) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      globalGroup.appendChild(option);
+    }
+    els.botUniverseMode.appendChild(globalGroup);
+    
+    const otherGroup = document.createElement("optgroup");
+    otherGroup.label = "Other";
+    const cryptoOpt = document.createElement("option");
+    cryptoOpt.value = "crypto";
+    cryptoOpt.textContent = "Crypto only";
+    otherGroup.appendChild(cryptoOpt);
+    els.botUniverseMode.appendChild(otherGroup);
+    
+    if (currentVal && Array.from(els.botUniverseMode.options).some(o => o.value === currentVal)) {
+       els.botUniverseMode.value = currentVal;
+    } else {
+       els.botUniverseMode.value = activeWatchlistName;
+    }
+  }
+}
+
+function switchWatchlist(name) {
+  const globalMarkets = getMarketWatchlists();
+  activeWatchlistName = name;
+  if (globalMarkets[name]) {
+    // Treat global watchlists as read-only presets but we copy them over if missing?
+    // Actually, just set savedWatchlist to the global symbols
+    savedWatchlist = [...globalMarkets[name]];
+  } else {
+    savedWatchlist = watchlists[name] || [];
+  }
+  updateWatchlistUI();
+  updateStorage();
+  renderWatchlist();
+  if (activeTab === "watchlist") loadDesk();
+}
+
+if (els.watchlistSelector) {
+  els.watchlistSelector.addEventListener("change", (e) => {
+    switchWatchlist(e.target.value);
+  });
+}
+
+if (els.watchlistAdd) {
+  els.watchlistAdd.addEventListener("click", () => {
+    const name = prompt("Enter new watchlist name:");
+    if (name && name.trim()) {
+      const cleanName = name.trim();
+      if (!watchlists[cleanName]) {
+        watchlists[cleanName] = [];
+        switchWatchlist(cleanName);
+      } else {
+        alert("Watchlist already exists!");
+      }
+    }
+  });
+}
+
+if (els.watchlistRename) {
+  els.watchlistRename.addEventListener("click", () => {
+    if (getMarketWatchlists()[activeWatchlistName]) {
+      alert("Cannot rename global market watchlists.");
+      return;
+    }
+    const newName = prompt("Enter new name for " + activeWatchlistName + ":", activeWatchlistName);
+    if (newName && newName.trim() && newName.trim() !== activeWatchlistName) {
+      const cleanName = newName.trim();
+      if (!watchlists[cleanName]) {
+        watchlists[cleanName] = watchlists[activeWatchlistName];
+        delete watchlists[activeWatchlistName];
+        switchWatchlist(cleanName);
+      } else {
+        alert("Watchlist with that name already exists!");
+      }
+    }
+  });
+}
+
+if (els.watchlistDelete) {
+  els.watchlistDelete.addEventListener("click", () => {
+    if (getMarketWatchlists()[activeWatchlistName]) {
+      alert("Cannot delete global market watchlists.");
+      return;
+    }
+    if (Object.keys(watchlists).length <= 1) {
+      alert("Cannot delete your only custom watchlist.");
+      return;
+    }
+    if (confirm("Delete watchlist '" + activeWatchlistName + "'?")) {
+      delete watchlists[activeWatchlistName];
+      switchWatchlist(Object.keys(watchlists)[0]);
+    }
+  });
+}
+
+updateWatchlistUI();
+
 bindControls();
 hydrateBotForm();
 renderBotStatus();
@@ -3077,3 +3313,4 @@ renderBotLog();
 connectStream(activeSymbol);
 refreshAll();
 startTimers();
+
