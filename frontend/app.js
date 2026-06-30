@@ -3,6 +3,20 @@ const DESK_INTERVAL_MS = 1500;
 const FLOW_INTERVAL_MS = 1200;
 const CANDLE_REFRESH_MS = 30000;
 const CRYPTO_SYMBOLS = new Set(["BTC-USD", "ETH-USD"]);
+const BOT_CRYPTO_SYMBOLS = [
+  "BTC-USD",
+  "ETH-USD",
+  "SOL-USD",
+  "XRP-USD",
+  "DOGE-USD",
+  "ADA-USD",
+  "AVAX-USD",
+  "LINK-USD",
+  "DOT-USD",
+  "LTC-USD",
+  "BCH-USD",
+  "UNI-USD",
+];
 const INTERVAL_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400 };
 const VISIBLE_BARS = { "1m": 80, "5m": 84, "15m": 80, "1h": 72, "6h": 60, "1d": 90 };
 
@@ -58,7 +72,7 @@ let tradeHistory = (() => {
 })();
 let activeTab = "watchlist";
 
-let activeSymbol = null;
+let activeSymbol = savedWatchlist[0] || DEFAULT_SYMBOLS[0];
 let activeInterval = "1m";
 let chartMode = "candles";
 let previousPrices = new Map();
@@ -127,6 +141,29 @@ const els = {
   portfolioList: document.querySelector("#portfolio-list"),
   btnBuy: document.querySelector("#btn-buy"),
   btnSell: document.querySelector("#btn-sell"),
+  btnBot: document.querySelector("#btn-bot"),
+  botModal: document.querySelector("#bot-modal"),
+  botClose: document.querySelector("#bot-close"),
+  botStart: document.querySelector("#bot-start"),
+  botStop: document.querySelector("#bot-stop"),
+  botState: document.querySelector("#bot-state"),
+  botSummary: document.querySelector("#bot-summary"),
+  botLog: document.querySelector("#bot-log"),
+  botClearLog: document.querySelector("#bot-clear-log"),
+  botReset: document.querySelector("#bot-reset"),
+  botUniverseMode: document.querySelector("#bot-universe-mode"),
+  botHome: document.querySelector("#bot-home"),
+  botCapital: document.querySelector("#bot-capital"),
+  botUniverse: document.querySelector("#bot-universe"),
+  botValue: document.querySelector("#bot-value"),
+  botPnl: document.querySelector("#bot-pnl"),
+  botDeployed: document.querySelector("#bot-deployed"),
+  botCashRoom: document.querySelector("#bot-cash-room"),
+  botRealized: document.querySelector("#bot-realized"),
+  botDecisions: document.querySelector("#bot-decisions"),
+  botRankings: document.querySelector("#bot-rankings"),
+  botPositions: document.querySelector("#bot-positions"),
+  botTrades: document.querySelector("#bot-trades"),
   orderModal: document.querySelector("#order-modal"),
   modalClose: document.querySelector("#modal-close"),
   modalConfirm: document.querySelector("#modal-confirm"),
@@ -138,20 +175,147 @@ const els = {
   lightningSell: document.querySelector("#btn-lightning-sell"),
   lightningFlatten: document.querySelector("#btn-lightning-flatten"),
   posTracker: document.querySelector("#pos-tracker"),
+  terminalOutput: document.querySelector("#terminal-output"),
+  terminalClear: document.querySelector("#terminal-clear"),
+  ticketBuy: document.querySelector("#ticket-buy"),
+  ticketSell: document.querySelector("#ticket-sell"),
+  ticketSize: document.querySelector("#ticket-size"),
+  ticketModeAmount: document.querySelector("#ticket-mode-amount"),
+  ticketModeShares: document.querySelector("#ticket-mode-shares"),
+  ticketMarket: document.querySelector("#ticket-market"),
+  ticketTrigger: document.querySelector("#ticket-trigger"),
+  ticketTriggerPrice: document.querySelector("#ticket-trigger-price"),
+  ticketPreview: document.querySelector("#ticket-preview"),
+  ticketRisk: document.querySelector("#ticket-risk"),
+  ticketSubmit: document.querySelector("#ticket-submit"),
+  pendingOrders: document.querySelector("#pending-orders"),
   btnToggleEma: document.querySelector("#btn-toggle-ema"),
 };
 
 let lwHistoryChart = null;
 let lwHistorySeries = null;
-
+const TERMINAL_MAX_LINES = 100;
+const TERMINAL_HISTORY_KEY = "trader-desk-terminal-history";
+let terminalHistory = (() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(TERMINAL_HISTORY_KEY));
+    return Array.isArray(stored) ? stored.slice(-50) : [];
+  } catch (e) {
+    return [];
+  }
+})();
+let terminalHistoryIndex = terminalHistory.length;
+const PENDING_ORDERS_KEY = "trader-desk-pending-orders";
+let pendingOrders = (() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(PENDING_ORDERS_KEY));
+    return Array.isArray(stored) ? stored : [];
+  } catch (e) {
+    return [];
+  }
+})();
+let activeTicketSide = "buy";
+let ticketSizeMode = "amount";
+let ticketOrderType = "market";
+const BOT_CONFIG_KEY = "trader-desk-bot-config-v3";
+const BOT_STATE_KEY = "trader-desk-bot-state-v3";
+const BOT_RUNS_KEY = "trader-desk-bot-runs-v1";
+const BOT_PRICE_MEMORY_LIMIT = 28;
+const BOT_MIN_TRADE_NOTIONAL = 1;
+const BOT_TICK_MS = 1000;
+const BOT_FULLY_DEPLOYED_LOG_MS = 10000;
+const BOT_RUN_HISTORY_LIMIT = 20;
+const BOT_RUN_AUDIT_LIMIT = 1200;
+const BOT_MODES = {
+  calm: {
+    label: "Calm",
+    capital: 100,
+    philosophy: "protect capital, wait for confirmation, scale into quiet strength",
+    riskAppetite: 0.32,
+    patience: 0.82,
+    convictionBias: 0.68,
+    maxExposure: 0.62,
+    maxPosition: 0.26,
+  },
+  normal: {
+    label: "Normal",
+    capital: 100,
+    philosophy: "balance trend, signal agreement, and controlled opportunity cost",
+    riskAppetite: 0.52,
+    patience: 0.58,
+    convictionBias: 0.52,
+    maxExposure: 0.78,
+    maxPosition: 0.36,
+  },
+  aggressive: {
+    label: "Aggressive",
+    capital: 100,
+    philosophy: "hunt acceleration, rotate quickly, accept wider variance for upside",
+    riskAppetite: 0.78,
+    patience: 0.28,
+    convictionBias: 0.38,
+    maxExposure: 0.92,
+    maxPosition: 0.58,
+  },
+};
+const defaultBotConfig = {
+  durationMin: 30,
+  universeMode: "watchlist",
+  modes: Object.fromEntries(Object.entries(BOT_MODES).map(([mode, def]) => [mode, { capital: def.capital }])),
+};
+function createBotModeState() {
+return { positions: {}, trades: [], logs: [], rankings: [], priceMemory: {}, lastTradeAt: {}, lastActionAt: 0, realized: 0, decisions: 0, lastLog: {} };
+}
+function createBotState() {
+  return {
+    running: false,
+    timer: null,
+    startedAt: null,
+    stopAt: null,
+    modes: Object.fromEntries(Object.keys(BOT_MODES).map(mode => [mode, createBotModeState()])),
+  };
+}
+let botConfig = (() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(BOT_CONFIG_KEY));
+    return { ...defaultBotConfig, ...(stored || {}), modes: { ...defaultBotConfig.modes, ...((stored && stored.modes) || {}) } };
+  } catch (e) {
+    return { ...defaultBotConfig };
+  }
+})();
+let botState = (() => {
+try {
+const stored = JSON.parse(localStorage.getItem(BOT_STATE_KEY));
+const next = createBotState();
+Object.keys(BOT_MODES).forEach(mode => {
+      next.modes[mode] = { ...createBotModeState(), ...((stored && stored.modes && stored.modes[mode]) || {}) };
+    });
+    return next;
+} catch (e) {
+return createBotState();
+}
+})();
+let botRuns = (() => {
+try {
+const stored = JSON.parse(localStorage.getItem(BOT_RUNS_KEY));
+return Array.isArray(stored) ? stored : [];
+} catch (e) {
+return [];
+}
+})();
+let activeBotRun = null;
 function updateStorage() {
   localStorage.setItem("trader-desk-watchlist", JSON.stringify(savedWatchlist));
   localStorage.setItem("trader-desk-history", JSON.stringify(savedHistory));
   localStorage.setItem("trader-desk-portfolio", JSON.stringify(savedPortfolio));
-  localStorage.setItem("trader-desk-trade-history", JSON.stringify(tradeHistory));
-  localStorage.setItem("trader-desk-wallet-cash", walletCash.toString());
+localStorage.setItem("trader-desk-trade-history", JSON.stringify(tradeHistory));
+localStorage.setItem("trader-desk-wallet-cash", walletCash.toString());
   localStorage.setItem("trader-desk-wallet-start", startingBalance.toString());
+  localStorage.setItem(PENDING_ORDERS_KEY, JSON.stringify(pendingOrders));
+  localStorage.setItem(BOT_CONFIG_KEY, JSON.stringify(botConfig));
   updateLightningTracker();
+  renderTradeTicket();
+  renderBotStatus();
 }
 
 function updateLightningTracker() {
@@ -184,9 +348,9 @@ function updateLightningTracker() {
 }
 
 function renderWallet() {
-  const elsBalance = document.getElementById("wallet-balance");
-  const elsPnl = document.getElementById("wallet-pnl");
-  if (!elsBalance || !elsPnl) return;
+const elsBalance = document.getElementById("wallet-balance");
+const elsPnl = document.getElementById("wallet-pnl");
+if (!elsBalance || !elsPnl) return;
   
   let portfolioValue = 0;
   savedPortfolio.forEach(pos => {
@@ -203,17 +367,1296 @@ function renderWallet() {
   elsPnl.textContent = `${pnl >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`;
   elsPnl.className = pnl >= 0 ? "positive" : "negative";
 
-  updateLightningTracker();
+updateLightningTracker();
+}
+
+function activeMarketPrice(symbol = activeSymbol) {
+const q = quotes.find(quote => quote.symbol === symbol);
+if (q?.price) return Number(q.price);
+if (symbol === activeSymbol && detail) return Number(detail.price || detail.lastTradePrice || detail.regularMarketPrice || 0);
+return 0;
+}
+
+function heldQuantity(symbol) {
+return savedPortfolio
+.filter(pos => pos.symbol === symbol)
+.reduce((sum, pos) => sum + Number(pos.qty || 0), 0);
+}
+
+function calculateTicketQuantity(price) {
+const size = Number(els.ticketSize?.value || 0);
+if (!Number.isFinite(size) || size <= 0 || !price) return 0;
+return ticketSizeMode === "amount" ? size / price : size;
+}
+
+function renderPendingOrders() {
+if (!els.pendingOrders) return;
+const activeOrders = pendingOrders.filter(order => order.symbol === activeSymbol);
+if (!activeOrders.length) {
+els.pendingOrders.innerHTML = "";
+return;
+}
+els.pendingOrders.innerHTML = activeOrders.map(order => `
+<div class="pending-order ${order.side}">
+<span>${order.side.toUpperCase()} ${order.qty.toFixed(4)} ${order.symbol}</span>
+<strong>${order.direction === "above" ? ">=" : "<="} $${formatPrice(order.triggerPrice)}</strong>
+<button type="button" onclick="cancelPendingOrder('${order.id}')">Cancel</button>
+</div>
+`).join("");
+}
+
+function renderTradeTicket() {
+if (!els.ticketPreview) return;
+const price = activeMarketPrice();
+const qty = calculateTicketQuantity(price);
+const notional = qty * price;
+const positionQty = heldQuantity(activeSymbol);
+const pendingCount = pendingOrders.filter(order => order.symbol === activeSymbol).length;
+
+els.ticketBuy?.classList.toggle("active", activeTicketSide === "buy");
+els.ticketSell?.classList.toggle("active", activeTicketSide === "sell");
+els.ticketModeAmount?.classList.toggle("active", ticketSizeMode === "amount");
+els.ticketModeShares?.classList.toggle("active", ticketSizeMode === "shares");
+els.ticketMarket?.classList.toggle("active", ticketOrderType === "market");
+els.ticketTrigger?.classList.toggle("active", ticketOrderType === "trigger");
+if (els.ticketTriggerPrice) els.ticketTriggerPrice.disabled = ticketOrderType !== "trigger";
+
+els.ticketPreview.textContent = price && qty
+? `${qty.toFixed(qty >= 10 ? 2 : 4)} ${activeSymbol} / $${formatPrice(notional)}`
+: "Enter size";
+els.ticketRisk.textContent = `${activeTicketSide.toUpperCase()} | Cash $${formatPrice(walletCash)} | Pos ${positionQty.toFixed(4)}${pendingCount ? ` | ${pendingCount} armed` : ""}`;
+els.ticketSubmit.textContent = ticketOrderType === "trigger" ? "Arm" : `Place ${activeTicketSide.toUpperCase()}`;
+els.ticketSubmit.className = `ticket-submit ${activeTicketSide}`;
+renderPendingOrders();
+}
+
+function triggerDirection(side, triggerPrice, currentPrice) {
+if (side === "buy") return triggerPrice >= currentPrice ? "above" : "below";
+return triggerPrice <= currentPrice ? "below" : "above";
+}
+
+function shouldTrigger(order, price) {
+return order.direction === "above" ? price >= order.triggerPrice : price <= order.triggerPrice;
+}
+
+function placeTicketOrder() {
+const price = activeMarketPrice();
+const qty = calculateTicketQuantity(price);
+if (!activeSymbol || !price || !qty) {
+appendTerminalLine("Order ticket needs a live price and valid size.", "warn");
+return;
+}
+
+if (ticketOrderType === "market") {
+const ok = executeTrade(activeSymbol, activeTicketSide, qty, price);
+if (ok) appendTerminalLine(`${activeTicketSide.toUpperCase()} ${qty.toFixed(4)} ${activeSymbol} @ $${formatPrice(price)}`, "ok");
+return;
+}
+
+const triggerPrice = Number(els.ticketTriggerPrice?.value || 0);
+if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) {
+appendTerminalLine("Trigger order needs a valid trigger price.", "warn");
+return;
+}
+
+const order = {
+id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+symbol: activeSymbol,
+side: activeTicketSide,
+qty,
+triggerPrice,
+direction: triggerDirection(activeTicketSide, triggerPrice, price),
+createdAt: new Date().toISOString(),
+};
+pendingOrders.push(order);
+updateStorage();
+renderChart();
+appendTerminalLine(`Armed ${order.side.toUpperCase()} ${order.qty.toFixed(4)} ${order.symbol} ${order.direction === "above" ? ">=" : "<="} $${formatPrice(order.triggerPrice)}`, "ok");
+}
+
+function processPendingOrders() {
+if (!pendingOrders.length) return;
+const remaining = [];
+let changed = false;
+pendingOrders.forEach(order => {
+const price = activeMarketPrice(order.symbol);
+if (!price || !shouldTrigger(order, price)) {
+remaining.push(order);
+return;
+}
+const ok = executeTrade(order.symbol, order.side, order.qty, price);
+if (ok) {
+changed = true;
+appendTerminalLine(`Triggered ${order.side.toUpperCase()} ${order.qty.toFixed(4)} ${order.symbol} @ $${formatPrice(price)}`, "ok");
+} else {
+remaining.push(order);
+}
+});
+if (changed || remaining.length !== pendingOrders.length) {
+pendingOrders = remaining;
+updateStorage();
+renderChart();
+}
+}
+
+window.cancelPendingOrder = function(id) {
+  pendingOrders = pendingOrders.filter(order => order.id !== id);
+  updateStorage();
+  renderChart();
+};
+
+function botModeIds() {
+  return Object.keys(BOT_MODES);
+}
+
+function botModeEl(mode, name) {
+  return document.querySelector(`#bot-${name}-${mode}`);
+}
+
+function botInputFor(mode) {
+  return document.querySelector(`#bot-capital-${mode}`);
+}
+
+function readBotConfig() {
+  const duration = Number(document.querySelector("#bot-duration")?.value);
+  const universeMode = els.botUniverseMode?.value === "crypto" ? "crypto" : "watchlist";
+  const modes = {};
+  botModeIds().forEach(mode => {
+    const input = botInputFor(mode);
+    const capital = Number(input?.value);
+    modes[mode] = { capital: Number.isFinite(capital) ? Math.max(0, capital) : BOT_MODES[mode].capital };
+  });
+  botConfig = {
+    durationMin: Number.isFinite(duration) ? clamp(Math.max(1, duration), 1, 1440) : defaultBotConfig.durationMin,
+    universeMode,
+    modes,
+  };
+  localStorage.setItem(BOT_CONFIG_KEY, JSON.stringify(botConfig));
+  return botConfig;
+}
+
+function hydrateBotForm() {
+const duration = document.querySelector("#bot-duration");
+if (duration) duration.value = botConfig.durationMin || defaultBotConfig.durationMin;
+if (els.botUniverseMode) els.botUniverseMode.value = botConfig.universeMode === "crypto" ? "crypto" : "watchlist";
+botModeIds().forEach(mode => {
+const input = botInputFor(mode);
+if (input) input.value = botConfig.modes?.[mode]?.capital ?? BOT_MODES[mode].capital;
+});
+}
+
+function botPersistRuns() {
+  localStorage.setItem(BOT_RUNS_KEY, JSON.stringify(botRuns.slice(0, BOT_RUN_HISTORY_LIMIT)));
+}
+
+function botPersistRunFile(run) {
+  const payload = JSON.parse(JSON.stringify(run));
+  postToApi("/api/bot-runs", payload).catch(() => {});
+}
+
+function botSnapshotForAudit(mode, ranked = null) {
+  const snap = botPortfolioSnapshot(mode, ranked);
+  return {
+cash: Number(snap.cash || 0),
+deployed: Number(snap.openValue || 0),
+totalValue: Number(snap.totalValue || 0),
+pnl: Number(snap.pnl || 0),
+capital: Number(snap.capital || 0),
+};
+}
+
+function botStartRunRecord() {
+const symbols = botUniverseSymbols();
+const run = {
+id: `run-${Date.now()}`,
+startedAt: new Date().toISOString(),
+endedAt: null,
+reason: null,
+durationMin: botConfig.durationMin,
+universeMode: botConfig.universeMode,
+symbols,
+modes: Object.fromEntries(botModeIds().map(mode => [mode, {
+capital: botCapital(mode),
+start: botSnapshotForAudit(mode),
+final: null,
+}])),
+audit: Object.fromEntries(botModeIds().map(mode => [mode, []])),
+};
+botRuns.unshift(run);
+botRuns = botRuns.slice(0, BOT_RUN_HISTORY_LIMIT);
+activeBotRun = run;
+botPersistRuns();
+}
+
+function botAppendRunAudit(mode, row, ranked = null) {
+if (!activeBotRun) return;
+const audit = activeBotRun.audit[mode] || [];
+const timing = botRunTiming(mode);
+const snap = botSnapshotForAudit(mode, ranked);
+audit.push({
+ts: new Date().toISOString(),
+elapsedSec: Math.round(timing.elapsedMs / 1000),
+remainingSec: Math.max(0, Math.round(timing.remainingMs / 1000)),
+phase: timing.phase,
+mode,
+action: row.action || "WATCH",
+symbol: row.symbol || null,
+price: Number(row.price || 0),
+confidence: Number(row.confidence || row.score || 0),
+risk: Number(row.risk || 0),
+cash: snap.cash,
+deployed: snap.deployed,
+totalValue: snap.totalValue,
+pnl: snap.pnl,
+reason: row.reason || "",
+});
+activeBotRun.audit[mode] = audit.slice(-BOT_RUN_AUDIT_LIMIT);
+botPersistRuns();
+}
+
+function botFinishRunRecord(reason) {
+  if (!activeBotRun) return;
+  activeBotRun.endedAt = new Date().toISOString();
+  activeBotRun.reason = reason;
+  botModeIds().forEach(mode => {
+    activeBotRun.modes[mode].final = botSnapshotForAudit(mode);
+  });
+  botPersistRuns();
+  botPersistRunFile(activeBotRun);
+  activeBotRun = null;
+}
+
+function botPersistState() {
+const clean = createBotState();
+  clean.running = botState.running;
+  clean.startedAt = botState.startedAt;
+  clean.stopAt = botState.stopAt;
+  botModeIds().forEach(mode => {
+    const state = botState.modes[mode];
+    clean.modes[mode] = {
+      ...createBotModeState(),
+      positions: state.positions,
+      trades: state.trades.slice(0, 200),
+      logs: state.logs.slice(0, 240),
+      rankings: state.rankings.slice(0, 20),
+      priceMemory: state.priceMemory,
+lastTradeAt: state.lastTradeAt,
+lastActionAt: state.lastActionAt,
+realized: state.realized,
+      decisions: state.decisions,
+      lastLog: state.lastLog,
+    };
+  });
+  localStorage.setItem(BOT_STATE_KEY, JSON.stringify(clean));
+}
+
+function resetBotSession() {
+  const wasRunning = botState.running;
+  if (botState.timer) clearTimeout(botState.timer);
+  botState = createBotState();
+  botState.running = wasRunning;
+  botState.startedAt = Date.now();
+  botState.stopAt = Date.now() + Math.max(1, Number(botConfig.durationMin || 30)) * 60000;
+  botPersistState();
+}
+
+function resetBots() {
+if (botState.timer) clearTimeout(botState.timer);
+botState = createBotState();
+activeBotRun = null;
+botRuns = [];
+botPersistState();
+botPersistRuns();
+renderBotStatus();
+renderBotLog();
+}
+
+function botUniverseSymbols() {
+  return botConfig.universeMode === "crypto" ? BOT_CRYPTO_SYMBOLS : savedWatchlist;
+}
+
+function botUniverseLabel() {
+  return botConfig.universeMode === "crypto" ? "crypto universe" : "watchlist";
+}
+
+function botCapital(mode) {
+  return Math.max(0, Number(botConfig.modes?.[mode]?.capital ?? BOT_MODES[mode].capital));
+}
+
+function botQuoteFor(symbol, ranked = []) {
+  return ranked.find(item => item.symbol === symbol) || quotes.find(item => item.symbol === symbol);
+}
+
+function botNow() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function rememberBotPrice(mode, symbol, price) {
+  if (!price) return;
+  const memory = botState.modes[mode].priceMemory;
+  const history = Array.isArray(memory[symbol]) ? memory[symbol] : [];
+  history.push({ price, time: Date.now() });
+  memory[symbol] = history.slice(-BOT_PRICE_MEMORY_LIMIT);
+}
+
+function botMicroMove(mode, symbol) {
+  const history = botState.modes[mode].priceMemory[symbol] || [];
+  if (history.length < 2) return 0;
+  const first = history[0].price;
+  const last = history[history.length - 1].price;
+  return first ? ((last - first) / first) * 100 : 0;
+}
+
+function botVolatility(mode, symbol) {
+  const history = botState.modes[mode].priceMemory[symbol] || [];
+  if (history.length < 4) return 0.75;
+  const returns = [];
+  for (let i = 1; i < history.length; i += 1) {
+    const prev = history[i - 1].price;
+    const next = history[i].price;
+    if (prev > 0 && next > 0) returns.push(((next - prev) / prev) * 100);
+  }
+  if (!returns.length) return 0.75;
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance = returns.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / returns.length;
+  return clamp(Math.sqrt(variance), 0.15, 5);
+}
+
+function botSignalFor(symbol) {
+  return signals.find(item => item.symbol === symbol);
+}
+
+function botHeldQuantity(mode, symbol) {
+  return Number(botState.modes[mode].positions[symbol]?.qty || 0);
+}
+
+function botAverageEntry(mode, symbol) {
+  return Number(botState.modes[mode].positions[symbol]?.avgPrice || 0);
+}
+
+function botOpenValue(mode, ranked = botState.modes[mode].rankings) {
+  return Object.entries(botState.modes[mode].positions).reduce((sum, [symbol, position]) => {
+    const quote = botQuoteFor(symbol, ranked);
+    const price = Number(quote?.price || position.avgPrice || 0);
+    return sum + (Number(position.qty || 0) * price);
+  }, 0);
+}
+
+function botCostBasis(mode) {
+  return Object.values(botState.modes[mode].positions).reduce((sum, position) => sum + Number(position.costBasis || 0), 0);
+}
+
+function botPortfolioSnapshot(mode, ranked = botState.modes[mode].rankings) {
+  const capital = botCapital(mode);
+  const openValue = botOpenValue(mode, ranked);
+  const costBasis = botCostBasis(mode);
+  const realized = Number(botState.modes[mode].realized || 0);
+  const cash = Math.max(0, capital - costBasis + realized);
+  const totalValue = cash + openValue;
+  return { capital, openValue, costBasis, realized, cash, totalValue, pnl: totalValue - capital };
+}
+
+function analyzeBotSymbolLegacy(mode, quote) {
+  const def = BOT_MODES[mode];
+  const price = Number(quote.price || 0);
+  if (!price) return null;
+  rememberBotPrice(mode, quote.symbol, price);
+  const changePercent = Number(quote.changePercent ?? quote.change_percent ?? 0);
+  const dayRange = quote.high && quote.low ? ((quote.high - quote.low) / price) * 100 : 0;
+  const microMove = botMicroMove(mode, quote.symbol);
+  const volatility = botVolatility(mode, quote.symbol);
+  const signal = botSignalFor(quote.symbol);
+  const heldQty = botHeldQuantity(mode, quote.symbol);
+  const entry = botAverageEntry(mode, quote.symbol);
+  const pnlPct = heldQty && entry ? ((price - entry) / entry) * 100 : 0;
+  let score = 50;
+  const reasons = [];
+
+  if (changePercent > 0) score += clamp(changePercent * (mode === "aggressive" ? 7 : mode === "calm" ? 3.8 : 5.2), 0, 22);
+  if (changePercent < 0) score += clamp(changePercent * (mode === "aggressive" ? 5.5 : 4.2), -24, 0);
+  reasons.push(`day ${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}%`);
+
+  if (microMove > 0) score += clamp(microMove * (mode === "aggressive" ? 18 : 11), 0, 18);
+  if (microMove < 0) score += clamp(microMove * (mode === "calm" ? 13 : 9), -18, 0);
+  reasons.push(`tape ${microMove >= 0 ? "+" : ""}${microMove.toFixed(2)}%`);
+
+  if (dayRange > 0) {
+    const rangeFit = mode === "calm" ? dayRange <= 3.2 : mode === "normal" ? dayRange <= 5.2 : dayRange <= 8;
+    score += rangeFit ? 5 : -6;
+    reasons.push(`range ${dayRange.toFixed(2)}%`);
+  }
+  if (volatility > 0) {
+    const volFit = mode === "calm" ? volatility <= 1.6 : mode === "normal" ? volatility <= 2.7 : volatility <= 4.2;
+    score += volFit ? 5 : -5;
+    reasons.push(`vol ${volatility.toFixed(2)}%`);
+  }
+  if (signal?.action) {
+    const confidence = Number(signal.confidence || 50);
+    const bias = Math.max(0, confidence - 50) * def.signalBias;
+    score += signal.action === "Buy" ? 8 + bias : -(8 + bias);
+    reasons.push(`signal ${signal.action} ${confidence}%`);
+  }
+  if (heldQty > 0) {
+    score += clamp(pnlPct * (mode === "aggressive" ? 2.8 : 2), -14, 14);
+    reasons.push(`open P&L ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`);
+  }
+  const lastTradeAt = botState.modes[mode].lastTradeAt[quote.symbol] || 0;
+  if (Date.now() - lastTradeAt < def.cooldownMs && heldQty <= 0) {
+    score -= 8;
+    reasons.push("cooldown");
+  }
+  const boundedScore = clamp(Math.round(score), 0, 100);
+  const stopLossPct = clamp(def.stopLossBase + volatility * def.stopLossVol, 0.35, mode === "aggressive" ? 5.8 : 3.5);
+  const takeProfitPct = clamp(def.takeProfitBase + volatility * def.takeProfitVol + Math.max(0, boundedScore - 70) * 0.025, 0.45, mode === "aggressive" ? 8 : 5.5);
+  return {
+    symbol: quote.symbol,
+    price,
+    score: boundedScore,
+    rankScore: boundedScore + Math.max(0, changePercent) * (mode === "aggressive" ? 2.2 : 1.4),
+    reasons: reasons.join(" | "),
+    heldQty,
+    entry,
+    pnlPct,
+    stopLossPct,
+    takeProfitPct,
+    openedAt: botState.modes[mode].positions[quote.symbol]?.openedAt || 0,
+  };
+}
+
+function botRankAnalyses(analyses) {
+  return analyses.filter(Boolean).sort((a, b) => b.rankScore - a.rankScore);
+}
+
+function botOrderNotionalLegacy(mode, candidate, cash) {
+  const def = BOT_MODES[mode];
+  const capital = botCapital(mode);
+  const reserve = capital * def.reservePct;
+  const spendable = Math.max(0, cash - reserve);
+  const currentValue = botHeldQuantity(mode, candidate.symbol) * candidate.price;
+  const positionRoom = Math.max(0, (capital * def.maxPositionPct) - currentValue);
+  const conviction = clamp((candidate.score - def.threshold + 12) / 34, 0.35, 1.25);
+  return Math.min(spendable, positionRoom, capital * def.allocationPct * conviction);
+}
+
+function botRecordTrade(mode, row) {
+  const state = botState.modes[mode];
+  state.trades.unshift({ time: botNow(), ...row });
+  state.trades = state.trades.slice(0, 200);
+}
+
+function logBotDecision(mode, row, options = {}) {
+  const state = botState.modes[mode];
+  const key = options.key || `${row.action}:${row.symbol || "desk"}:${row.reason || ""}`;
+  const now = Date.now();
+  if (options.throttleMs && state.lastLog[key] && now - state.lastLog[key] < options.throttleMs) return;
+  state.lastLog[key] = now;
+  state.logs.unshift({ time: botNow(), mode, ...row });
+  state.logs = state.logs.slice(0, 240);
+  botPersistState();
+  renderBotLog(mode);
+}
+
+function executeBotBuy(mode, candidate, notional, reason) {
+  const state = botState.modes[mode];
+  const snapshot = botPortfolioSnapshot(mode);
+  const minTrade = Math.min(BOT_MIN_TRADE_NOTIONAL, Math.max(0.25, snapshot.capital * 0.01));
+  const cleanNotional = Math.min(notional, snapshot.cash);
+  if (cleanNotional < minTrade || candidate.price <= 0) return false;
+  const qty = cleanNotional / candidate.price;
+  const position = state.positions[candidate.symbol] || { qty: 0, avgPrice: 0, costBasis: 0, realized: 0, openedAt: Date.now() };
+  position.qty = Number(position.qty || 0) + qty;
+  position.costBasis = Number(position.costBasis || 0) + cleanNotional;
+  position.avgPrice = position.qty > 0 ? position.costBasis / position.qty : 0;
+  position.openedAt = position.openedAt || Date.now();
+  position.updatedAt = Date.now();
+  state.positions[candidate.symbol] = position;
+  state.lastTradeAt[candidate.symbol] = Date.now();
+  botRecordTrade(mode, { side: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, reason });
+  logBotDecision(mode, { action: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, score: candidate.score, reason });
+  return true;
+}
+
+function executeBotSell(mode, candidate, qty, reason) {
+  const state = botState.modes[mode];
+  const position = state.positions[candidate.symbol];
+  if (!position || Number(position.qty || 0) <= 0) return false;
+  const sellQty = Math.min(qty, Number(position.qty || 0));
+  if (sellQty <= 0 || candidate.price <= 0) return false;
+  const avgPrice = Number(position.avgPrice || candidate.price);
+  const notional = sellQty * candidate.price;
+  const costRemoved = sellQty * avgPrice;
+  const realized = notional - costRemoved;
+  position.qty = Math.max(0, Number(position.qty || 0) - sellQty);
+  position.costBasis = Math.max(0, Number(position.costBasis || 0) - costRemoved);
+  position.realized = Number(position.realized || 0) + realized;
+  position.updatedAt = Date.now();
+  state.realized = Number(state.realized || 0) + realized;
+  if (position.qty <= 0.000001) delete state.positions[candidate.symbol];
+  else state.positions[candidate.symbol] = position;
+  state.lastTradeAt[candidate.symbol] = Date.now();
+  botRecordTrade(mode, { side: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, pnl: realized, reason });
+  logBotDecision(mode, { action: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, pnl: realized, score: candidate.score, reason });
+  return true;
+}
+
+function renderBotPositions(mode) {
+  const el = botModeEl(mode, "positions");
+  if (!el) return;
+  const rows = Object.entries(botState.modes[mode].positions)
+    .filter(([, position]) => Number(position.qty || 0) > 0)
+    .map(([symbol, position]) => {
+      const quote = botQuoteFor(symbol);
+      const price = Number(quote?.price || position.avgPrice || 0);
+      const qty = Number(position.qty || 0);
+      const value = qty * price;
+      const entry = Number(position.avgPrice || 0);
+      const pnl = entry ? (price - entry) * qty : 0;
+      const pnlPct = entry ? ((price - entry) / entry) * 100 : 0;
+      return { symbol, qty, price, value, entry, pnl, pnlPct };
+    });
+  if (!rows.length) {
+    el.innerHTML = '<div class="bot-empty">No positions. Waiting for a clean entry.</div>';
+    return;
+  }
+  el.innerHTML = rows.map(item => `
+    <div class="bot-position-row ${item.pnl >= 0 ? "positive" : "negative"}">
+      <strong>${item.symbol}</strong>
+      <span>${item.qty.toFixed(4)} sh @ $${formatPrice(item.entry)}</span>
+      <em>$${formatPrice(item.value)}</em>
+      <small>${item.pnl >= 0 ? "+" : ""}$${formatPrice(item.pnl)} (${item.pnlPct >= 0 ? "+" : ""}${item.pnlPct.toFixed(2)}%)</small>
+    </div>
+  `).join("");
+}
+
+function renderBotLog(mode) {
+  const modes = mode ? [mode] : botModeIds();
+  modes.forEach(currentMode => {
+    const el = botModeEl(currentMode, "log");
+    if (!el) return;
+    const logs = botState.modes[currentMode].logs;
+    if (!logs.length) {
+      el.innerHTML = '<div class="bot-empty">Audit log will appear here.</div>';
+      return;
+    }
+    el.innerHTML = logs.slice(0, 80).map(row => `
+      <div class="bot-log-row ${String(row.action || "").toLowerCase()}">
+        <strong>${row.action || "SCAN"}${row.symbol ? ` ${row.symbol}` : ""}</strong>
+        <span>${row.time}</span>
+        <small>${row.notional ? `$${formatPrice(row.notional)} | ` : ""}${row.qty ? `${Number(row.qty).toFixed(4)} sh | ` : ""}${row.pnl !== undefined ? `P&L ${row.pnl >= 0 ? "+" : ""}$${formatPrice(row.pnl)} | ` : ""}${row.reason || ""}</small>
+      </div>
+    `).join("");
+  });
+}
+
+function renderBotStatus() {
+const snapshots = Object.fromEntries(botModeIds().map(mode => [mode, botPortfolioSnapshot(mode)]));
+const totalCapital = Object.values(snapshots).reduce((sum, snap) => sum + snap.capital, 0);
+const totalValue = Object.values(snapshots).reduce((sum, snap) => sum + snap.totalValue, 0);
+  const totalPnl = totalValue - totalCapital;
+  if (els.botState) {
+    els.botState.textContent = botState.running ? "Running" : "Stopped";
+    els.botState.className = botState.running ? "running" : "";
+  }
+  if (els.botSummary) {
+    const secondsLeft = botState.running ? Math.max(0, Math.round((botState.stopAt - Date.now()) / 1000)) : 0;
+    els.botSummary.textContent = botState.running
+      ? `$${formatPrice(totalValue)} live value | ${totalPnl >= 0 ? "+" : ""}$${formatPrice(totalPnl)} combined P&L | ${secondsLeft}s left`
+      : `$${formatPrice(totalValue)} combined value | ${totalPnl >= 0 ? "+" : ""}$${formatPrice(totalPnl)} paper P&L`;
+  }
+  if (els.botStart) {
+    els.botStart.classList.toggle("hidden", botState.running);
+    els.botStart.disabled = botState.running;
+  }
+  if (els.botStop) {
+    els.botStop.classList.toggle("hidden", !botState.running);
+    els.botStop.disabled = !botState.running;
+  }
+  els.btnBot?.classList.toggle("active", botState.running);
+  document.querySelector("#bot-duration")?.toggleAttribute("disabled", botState.running);
+  els.botUniverseMode?.toggleAttribute("disabled", botState.running);
+  botModeIds().forEach(mode => {
+    const snap = snapshots[mode];
+    const stateEl = botModeEl(mode, "state");
+    const valueEl = botModeEl(mode, "value");
+    const pnlEl = botModeEl(mode, "pnl");
+    const cashEl = botModeEl(mode, "cash");
+    const deployedEl = botModeEl(mode, "deployed");
+    botInputFor(mode)?.toggleAttribute("disabled", botState.running);
+    if (stateEl) stateEl.textContent = botState.running ? "Live" : "Idle";
+    if (valueEl) valueEl.textContent = `$${formatPrice(snap.totalValue)}`;
+    if (pnlEl) {
+      pnlEl.textContent = `${snap.pnl >= 0 ? "+" : ""}$${formatPrice(snap.pnl)}`;
+      pnlEl.className = snap.pnl >= 0 ? "positive" : "negative";
+    }
+    if (cashEl) cashEl.textContent = `$${formatPrice(snap.cash)}`;
+    if (deployedEl) deployedEl.textContent = `$${formatPrice(snap.openValue)}`;
+renderBotPositions(mode);
+});
+}
+
+function botCloseOpenPositions(reason) {
+botModeIds().forEach(mode => {
+Object.keys(botState.modes[mode].positions).forEach(symbol => {
+const position = botState.modes[mode].positions[symbol];
+const qty = Number(position?.qty || 0);
+if (qty <= 0) return;
+const quote = botQuoteFor(symbol);
+const price = Number(quote?.price || position.avgPrice || 0);
+if (price <= 0) return;
+const candidate = {
+symbol,
+price,
+score: 0,
+confidence: 0,
+risk: 0,
+shortMomentumPct: 0,
+noisePct: 0,
+signalAction: "Exit",
+signalConfidence: 0,
+};
+if (executeBotSell(mode, candidate, qty, reason)) {
+botAppendRunAudit(mode, { action: "SELL", symbol, price, reason }, null);
+}
+});
+});
+}
+
+function stopBot(reason = "stopped") {
+if (botState.timer) clearTimeout(botState.timer);
+botState.timer = null;
+if (botState.running) {
+botCloseOpenPositions(reason === "run duration completed" ? "window complete; flattened open paper positions" : reason);
+botModeIds().forEach(mode => logBotDecision(mode, { action: "STOP", reason }, { key: `stop:${reason}`, throttleMs: 500 }));
+botFinishRunRecord(reason);
+}
+botState.running = false;
+botPersistState();
+renderBotStatus();
+}
+
+function scheduleBotDecision() {
+  if (!botState.running) return;
+  if (botState.timer) clearTimeout(botState.timer);
+  if (Date.now() >= botState.stopAt) {
+    stopBot("run duration completed");
+    return;
+  }
+botState.timer = setTimeout(enhancedRunBotDecision, BOT_TICK_MS);
+}
+
+function startBot() {
+if (botState.running) return;
+readBotConfig();
+resetBotSession();
+botState.running = true;
+botStartRunRecord();
+botModeIds().forEach(mode => {
+logBotDecision(mode, { action: "START", reason: `$${formatPrice(botCapital(mode))} capital; ${botConfig.durationMin} minute run; scanning ${botUniverseSymbols().length} ${botUniverseLabel()} symbols` });
+});
+  renderBotStatus();
+enhancedRunBotDecision();
+}
+
+function runBotModeDecisionLegacy(mode, ranked) {
+  const def = BOT_MODES[mode];
+  const state = botState.modes[mode];
+  state.rankings = ranked;
+  state.decisions += 1;
+  const threshold = def.threshold;
+  const strongestCandidate = ranked.find(item => botHeldQuantity(mode, item.symbol) <= 0);
+
+  for (const item of ranked.filter(row => botHeldQuantity(mode, row.symbol) > 0)) {
+    const qty = botHeldQuantity(mode, item.symbol);
+    const heldMs = Date.now() - (state.positions[item.symbol]?.openedAt || Date.now());
+    const betterSetup = heldMs >= def.minHoldMs && strongestCandidate && strongestCandidate.symbol !== item.symbol && strongestCandidate.rankScore >= item.rankScore + def.rotationGap;
+    const exitReason = item.pnlPct <= -item.stopLossPct
+      ? `risk exit: ${item.pnlPct.toFixed(2)}% hit stop ${item.stopLossPct.toFixed(2)}%`
+      : item.pnlPct >= item.takeProfitPct
+        ? `profit taken: ${item.pnlPct.toFixed(2)}% reached target ${item.takeProfitPct.toFixed(2)}%`
+        : item.score <= Math.max(32, threshold - 25)
+          ? `edge faded: ${item.score}/100 below hold line`
+          : betterSetup
+            ? `rotation: ${strongestCandidate.symbol} has stronger setup`
+            : null;
+    if (exitReason && qty > 0) {
+      executeBotSell(mode, item, qty, exitReason);
+      return;
+    }
+  }
+
+  const snapshot = botPortfolioSnapshot(mode, ranked);
+  const minTrade = Math.min(BOT_MIN_TRADE_NOTIONAL, Math.max(0.25, snapshot.capital * 0.01));
+  if (snapshot.cash < minTrade) {
+    logBotDecision(mode, { action: "HOLD", reason: `cash fully deployed; managing exits on $${formatPrice(snapshot.openValue)} open value` }, { key: "fully-deployed", throttleMs: BOT_FULLY_DEPLOYED_LOG_MS });
+    return;
+  }
+
+  const best = ranked.find(item => item.score >= threshold && botHeldQuantity(mode, item.symbol) <= 0);
+  if (!best) {
+    logBotDecision(mode, { action: "HOLD", reason: `best ${ranked[0].symbol} ${ranked[0].score}/100; buy line ${threshold}; waiting for cleaner edge` }, { key: `hold:${ranked[0].symbol}:${ranked[0].score}`, throttleMs: 6000 });
+    return;
+  }
+
+  const notional = botOrderNotional(mode, best, snapshot.cash);
+  if (notional < minTrade) {
+    logBotDecision(mode, { action: "HOLD", symbol: best.symbol, score: best.score, reason: `capital reserved or position cap reached; cash $${formatPrice(snapshot.cash)}` }, { key: `sized-out:${best.symbol}`, throttleMs: 8000 });
+    return;
+  }
+
+  executeBotBuy(mode, best, notional, `score ${best.score}/100 over ${threshold}; size $${formatPrice(notional)}; stop ${best.stopLossPct.toFixed(2)}%; target ${best.takeProfitPct.toFixed(2)}%; ${best.reasons}`);
+}
+
+function botHistoryStats(history, price) {
+  const prices = history.map(item => Number(item.price || 0)).filter(Boolean);
+  const samples = prices.length;
+  if (!samples || !price) {
+    return { samples: 0, momentumPct: 0, shortMomentumPct: 0, volatilityPct: 0.75, noisePct: 0, supportDistancePct: 0, resistanceDistancePct: 0 };
+  }
+  const first = prices[0];
+  const pivot = prices[Math.max(0, samples - 4)];
+  const high = Math.max(...prices);
+  const low = Math.min(...prices);
+  const returns = [];
+  for (let i = 1; i < prices.length; i += 1) {
+    if (prices[i - 1] > 0) returns.push(((prices[i] - prices[i - 1]) / prices[i - 1]) * 100);
+  }
+  const mean = returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : 0;
+  const variance = returns.length ? returns.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / returns.length : 0;
+  const volatilityPct = clamp(Math.sqrt(variance), 0.08, 7);
+  const noisePct = clamp(volatilityPct - Math.abs(mean), 0, 7);
+  return {
+    samples,
+    momentumPct: first ? ((price - first) / first) * 100 : 0,
+    shortMomentumPct: pivot ? ((price - pivot) / pivot) * 100 : 0,
+    volatilityPct,
+    noisePct,
+    supportDistancePct: low ? ((price - low) / low) * 100 : 0,
+    resistanceDistancePct: high ? ((high - price) / price) * 100 : 0,
+  };
+}
+
+function botMarketAgreement(context) {
+  let agreement = 0;
+  if (context.changePercent > 0) agreement += 1;
+  if (context.momentumPct > 0) agreement += 1;
+  if (context.shortMomentumPct > 0) agreement += 1;
+  if (context.signalAction === "Buy") agreement += 1;
+  if (context.signalAction === "Sell") agreement -= 1;
+  if (context.dayRangePct > 6 && context.noisePct > 2.5) agreement -= 1;
+  return clamp(agreement / 4, -1, 1);
+}
+
+function analyzeBotSymbol(mode, quote) {
+  const price = Number(quote.price || 0);
+  if (!price) return null;
+  rememberBotPrice(mode, quote.symbol, price);
+  const history = botState.modes[mode].priceMemory[quote.symbol] || [];
+  const stats = botHistoryStats(history, price);
+  const signal = botSignalFor(quote.symbol);
+  const heldQty = botHeldQuantity(mode, quote.symbol);
+  const entry = botAverageEntry(mode, quote.symbol);
+  const changePercent = Number(quote.changePercent ?? quote.change_percent ?? 0);
+  const dayRangePct = quote.high && quote.low ? ((quote.high - quote.low) / price) * 100 : 0;
+  const pnlPct = heldQty && entry ? ((price - entry) / entry) * 100 : 0;
+  const signalConfidence = Number(signal?.confidence || 50);
+  const signalAction = signal?.action || "Hold";
+  const context = {
+    symbol: quote.symbol,
+    price,
+    changePercent,
+    dayRangePct,
+    signalAction,
+    signalConfidence,
+    heldQty,
+    entry,
+    pnlPct,
+    openedAt: botState.modes[mode].positions[quote.symbol]?.openedAt || 0,
+    ...stats,
+  };
+  context.agreement = botMarketAgreement(context);
+  context.trendQuality = clamp((context.momentumPct * 9) + (context.shortMomentumPct * 14) + (context.changePercent * 3) + (context.agreement * 18) - (context.noisePct * 4), -45, 55);
+  context.riskLoad = clamp((context.volatilityPct * 9) + (context.dayRangePct * 1.6) + Math.max(0, -context.shortMomentumPct) * 9, 0, 100);
+  context.opportunity = clamp(50 + context.trendQuality - (context.riskLoad * 0.35), 0, 100);
+  context.score = Math.round(context.opportunity);
+context.rankScore = context.opportunity + Math.max(0, context.shortMomentumPct) * 4 + Math.max(0, context.resistanceDistancePct) * 0.6;
+return context;
+}
+
+function botRecentPerformance(mode) {
+  const trades = botState.modes[mode].trades.filter(trade => trade.side === "SELL").slice(0, 12);
+  if (!trades.length) return { realizedBias: 0, winRate: 0.5 };
+  const wins = trades.filter(trade => Number(trade.pnl || 0) > 0).length;
+  const pnl = trades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
+  const capital = Math.max(1, botCapital(mode));
+  return { realizedBias: clamp((pnl / capital) * 100, -10, 10), winRate: wins / trades.length };
+}
+
+function botStrategyProfile(mode, snapshot) {
+  const def = BOT_MODES[mode];
+  const drawdownPct = snapshot.capital ? Math.max(0, ((snapshot.capital - snapshot.totalValue) / snapshot.capital) * 100) : 0;
+  const performance = botRecentPerformance(mode);
+  const pressure = clamp(drawdownPct / 8, 0, 1);
+  const timeLeftPct = botState.running && botState.stopAt > botState.startedAt
+    ? clamp((botState.stopAt - Date.now()) / (botState.stopAt - botState.startedAt), 0, 1)
+    : 1;
+  const learningBias = ((performance.winRate - 0.5) * 0.12) + (performance.realizedBias / 80);
+  const urgency = 1 - timeLeftPct;
+  const convictionDemand = clamp(def.convictionBias + pressure * 0.12 - learningBias - urgency * (def.riskAppetite * 0.08), 0.24, 0.86);
+  return {
+    ...def,
+    mode,
+    drawdownPct,
+    timeLeftPct,
+    performance,
+    convictionDemand,
+    riskTolerance: clamp(def.riskAppetite - pressure * (0.38 - def.riskAppetite * 0.18) + learningBias, 0.16, 0.92),
+    patienceLevel: clamp(def.patience + pressure * 0.16 + convictionDemand * 0.08 - urgency * def.riskAppetite * 0.14, 0.15, 0.92),
+  };
+}
+
+function botDecisionReason(decision, context) {
+  const side = decision.action === "BUY" ? `size $${formatPrice(decision.notional || 0)}` : decision.action;
+  return `${side}; ${decision.style} style; confidence ${Math.round(decision.confidence)}; risk ${Math.round(decision.risk)}; patience ${Math.round(decision.patience * 100)}; conviction need ${Math.round(decision.conviction * 100)}; momentum ${context.shortMomentumPct >= 0 ? "+" : ""}${context.shortMomentumPct.toFixed(2)}%; noise ${context.noisePct.toFixed(2)}%; ${context.signalAction} signal ${context.signalConfidence}%`;
+}
+
+function botBuildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0) {
+  const volatility = Math.max(0.25, context.volatilityPct);
+  return {
+    action,
+    symbol: context.symbol,
+    price: context.price,
+    score: Math.round(confidence),
+    confidence: clamp(confidence, 0, 100),
+    risk: clamp(risk, 0, 100),
+    style: profile.label,
+    patience: profile.patienceLevel,
+    conviction: profile.convictionDemand,
+    notional,
+    sellFraction,
+    stopLossPct: clamp(0.35 + volatility * (0.7 + profile.riskTolerance), 0.35, 6.5),
+    takeProfitPct: clamp(0.5 + volatility * (1.1 + profile.riskTolerance) + Math.max(0, confidence - 62) * 0.035, 0.45, 9),
+  };
+}
+
+function botObservationNeed(profile) {
+  return Math.round(clamp(2.5 + profile.patienceLevel * 3.2 + profile.convictionDemand * 1.4 - profile.riskTolerance * 1.2, 3, 7));
+}
+
+function botMinimumEdge(profile, context, snapshot) {
+  const exposurePct = snapshot.capital ? snapshot.openValue / snapshot.capital : 0;
+  const uncertainty = context.noisePct * 1.25 + Math.max(0, -context.agreement) * 7 + exposurePct * 5;
+  const performanceAdjustment = profile.performance.realizedBias * 0.25 + (profile.performance.winRate - 0.5) * 5;
+  return clamp(
+    5 + profile.patienceLevel * 11 + profile.convictionDemand * 13 - profile.riskTolerance * 9 + uncertainty - performanceAdjustment,
+    3,
+    28,
+  );
+}
+
+function calmStrategyBrain(context, profile, snapshot) {
+  const ready = context.samples >= botObservationNeed(profile);
+  const confidence = clamp(42 + context.trendQuality * 0.78 + context.agreement * 18 - context.noisePct * 7 - profile.drawdownPct * 2 - profile.convictionDemand * 5, 0, 100);
+  const risk = clamp(context.riskLoad * (0.78 + profile.convictionDemand * 0.14) + Math.max(0, -context.shortMomentumPct) * 8, 0, 100);
+  const edge = confidence - risk * 0.42 - profile.patienceLevel * 8 - profile.convictionDemand * 7;
+  const requiredEdge = botMinimumEdge(profile, context, snapshot);
+  if (!ready) return botBuildDecision("WAIT", context, profile, confidence, risk);
+  if (context.heldQty > 0 && (context.pnlPct <= -botBuildDecision("HOLD", context, profile, confidence, risk).stopLossPct || (context.pnlPct > 0.35 && context.shortMomentumPct < 0))) return botBuildDecision("EXIT", context, profile, confidence, risk, 0, 1);
+  if (context.heldQty > 0) return botBuildDecision("HOLD", context, profile, confidence, risk);
+  const available = Math.max(0, snapshot.cash - snapshot.capital * (0.22 + profile.drawdownPct / 80));
+  const conviction = clamp((edge - requiredEdge + 12) / 48, 0, 0.72) * clamp(1 - profile.convictionDemand * 0.35, 0.55, 1);
+  const notional = Math.min(available, snapshot.capital * profile.maxPosition * conviction);
+  return notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge ? botBuildDecision("BUY", context, profile, confidence, risk, notional) : botBuildDecision("WATCH", context, profile, confidence, risk);
+}
+
+function normalStrategyBrain(context, profile, snapshot) {
+  const ready = context.samples >= botObservationNeed(profile);
+  const confidence = clamp(45 + context.trendQuality * 0.92 + context.agreement * 16 - context.noisePct * 4 + profile.performance.realizedBias - profile.convictionDemand * 2, 0, 100);
+  const risk = clamp(context.riskLoad * (0.66 + profile.convictionDemand * 0.12) + Math.max(0, -context.momentumPct) * 4, 0, 100);
+  const edge = confidence - risk * 0.34 - profile.patienceLevel * 5 - profile.convictionDemand * 4;
+  const requiredEdge = botMinimumEdge(profile, context, snapshot);
+  if (!ready) return botBuildDecision("WAIT", context, profile, confidence, risk);
+  if (context.heldQty > 0 && context.pnlPct <= -botBuildDecision("HOLD", context, profile, confidence, risk).stopLossPct) return botBuildDecision("EXIT", context, profile, confidence, risk, 0, 1);
+  if (context.heldQty > 0 && context.pnlPct > botBuildDecision("HOLD", context, profile, confidence, risk).takeProfitPct) return botBuildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, 0.55);
+  if (context.heldQty > 0) return botBuildDecision("HOLD", context, profile, confidence, risk);
+  const deployedPct = snapshot.capital ? snapshot.openValue / snapshot.capital : 0;
+  const exposureRoom = Math.max(0, (snapshot.capital * profile.maxExposure) - snapshot.openValue);
+  const conviction = clamp((edge - requiredEdge + 15 + (1 - deployedPct) * 8) / 62, 0, 1);
+  const notional = Math.min(snapshot.cash, exposureRoom, snapshot.capital * profile.maxPosition * conviction);
+  return notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge ? botBuildDecision("BUY", context, profile, confidence, risk, notional) : botBuildDecision("WATCH", context, profile, confidence, risk);
+}
+
+function aggressiveStrategyBrain(context, profile, snapshot) {
+  const ready = context.samples >= botObservationNeed(profile);
+  const acceleration = Math.max(0, context.shortMomentumPct - Math.max(0, context.noisePct * 0.18));
+  const confidence = clamp(43 + context.trendQuality * 1.08 + acceleration * 12 + context.agreement * 12 - Math.max(0, -profile.performance.realizedBias) * 0.7 + (1 - profile.convictionDemand) * 4, 0, 100);
+  const risk = clamp(context.riskLoad * (0.56 + profile.convictionDemand * 0.1) + context.noisePct * 3 + profile.drawdownPct * 1.2, 0, 100);
+  const edge = confidence - risk * 0.26 - profile.patienceLevel * 3 - profile.convictionDemand * 2;
+  const requiredEdge = botMinimumEdge(profile, context, snapshot);
+  if (!ready) return botBuildDecision("WAIT", context, profile, confidence, risk);
+  if (context.heldQty > 0 && context.pnlPct <= -botBuildDecision("HOLD", context, profile, confidence, risk).stopLossPct) return botBuildDecision("EXIT", context, profile, confidence, risk, 0, 1);
+  if (context.heldQty > 0 && context.pnlPct > 0.45 && context.shortMomentumPct < -0.05) return botBuildDecision("REDUCE", context, profile, confidence, risk, 0, 0.42);
+  if (context.heldQty > 0) return botBuildDecision("HOLD", context, profile, confidence, risk);
+  const exposureRoom = Math.max(0, (snapshot.capital * profile.maxExposure) - snapshot.openValue);
+  const conviction = clamp((edge - requiredEdge + 18) / 58, 0, 1.12);
+  const notional = Math.min(snapshot.cash, exposureRoom, snapshot.capital * profile.maxPosition * conviction);
+  return notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge ? botBuildDecision("BUY", context, profile, confidence, risk, notional) : botBuildDecision("WATCH", context, profile, confidence, risk);
+}
+
+function botBrainFor(mode, context, profile, snapshot) {
+  if (mode === "calm") return calmStrategyBrain(context, profile, snapshot);
+  if (mode === "aggressive") return aggressiveStrategyBrain(context, profile, snapshot);
+  return normalStrategyBrain(context, profile, snapshot);
+}
+
+function botOrderNotional(mode, candidate, cash) {
+  const profile = botStrategyProfile(mode, botPortfolioSnapshot(mode));
+  const currentValue = botHeldQuantity(mode, candidate.symbol) * candidate.price;
+  const positionRoom = Math.max(0, (botCapital(mode) * profile.maxPosition) - currentValue);
+  return Math.min(cash, positionRoom, Number(candidate.notional || 0));
+}
+
+function runBotModeDecision(mode, ranked) {
+  const state = botState.modes[mode];
+  state.rankings = ranked;
+  state.decisions += 1;
+  const snapshot = botPortfolioSnapshot(mode, ranked);
+  const profile = botStrategyProfile(mode, snapshot);
+  const held = ranked.filter(item => botHeldQuantity(mode, item.symbol) > 0);
+
+  for (const item of held) {
+    const decision = botBrainFor(mode, item, profile, snapshot);
+    if ((decision.action === "EXIT" || decision.action === "REDUCE" || decision.action === "LOCK PROFIT") && item.heldQty > 0) {
+      const qty = item.heldQty * (decision.sellFraction || 1);
+      executeBotSell(mode, item, qty, botDecisionReason(decision, item));
+      return;
+    }
+  }
+
+  const openSymbols = new Set(held.map(item => item.symbol));
+  const candidates = ranked.filter(item => !openSymbols.has(item.symbol));
+  const decisions = candidates.map(item => ({ context: item, decision: botBrainFor(mode, item, profile, snapshot) }));
+  const buy = decisions
+    .filter(item => item.decision.action === "BUY")
+    .sort((a, b) => (b.decision.confidence - b.decision.risk * 0.35) - (a.decision.confidence - a.decision.risk * 0.35))[0];
+
+  if (buy) {
+    const notional = botOrderNotional(mode, buy.decision, snapshot.cash);
+    if (notional >= Math.max(0.25, snapshot.capital * 0.01)) {
+      executeBotBuy(mode, { ...buy.context, ...buy.decision, notional }, notional, botDecisionReason({ ...buy.decision, notional }, buy.context));
+      return;
+    }
+  }
+
+  const top = decisions[0] || (held[0] ? { context: held[0], decision: botBrainFor(mode, held[0], profile, snapshot) } : null);
+  if (!top) return;
+  const action = top.decision.action === "WAIT" ? "WAIT" : "WATCH";
+  const observationNeed = botObservationNeed(profile);
+  const sampleText = top.context.samples < observationNeed ? `; samples ${top.context.samples}/${observationNeed}` : "";
+  logBotDecision(mode, { action, symbol: top.context.symbol, score: top.decision.score, reason: `${botDecisionReason(top.decision, top.context)}${sampleText}` }, { key: `${action}:${top.context.symbol}:${Math.round(top.decision.confidence / 5)}`, throttleMs: action === "WAIT" ? 2500 : 4500 });
+}
+
+function runBotDecision() {
+  if (!botState.running) return;
+  const symbols = botUniverseSymbols();
+  if (!symbols.length) {
+    botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: `${botUniverseLabel()} empty` }, { key: "empty-universe", throttleMs: 5000 }));
+    renderBotStatus();
+    scheduleBotDecision();
+    return;
+  }
+  try {
+    const universe = symbols
+      .map(symbol => quotes.find(quote => quote.symbol === symbol))
+      .filter(quote => quote && Number(quote.price || 0) > 0);
+    if (!universe.length) {
+      botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: `waiting for live ${botUniverseLabel()} prices` }, { key: "no-prices", throttleMs: 5000 }));
+      renderBotStatus();
+      scheduleBotDecision();
+      return;
+    }
+    botModeIds().forEach(mode => {
+      const ranked = botRankAnalyses(universe.map(quote => analyzeBotSymbol(mode, quote)));
+      if (ranked.length) runBotModeDecision(mode, ranked);
+    });
+  } catch (err) {
+    botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: err.message || "bot decision failed" }, { key: "decision-error", throttleMs: 5000 }));
+  }
+  renderBotStatus();
+  botPersistState();
+  scheduleBotDecision();
+}
+function botRunTiming(mode = "normal") {
+const now = Date.now();
+const startedAt = Number(botState.startedAt || now);
+const stopAt = Number(botState.stopAt || now + Math.max(1, Number(botConfig.durationMin || 30)) * 60000);
+const durationMs = Math.max(1000, stopAt - startedAt);
+const elapsedMs = clamp(now - startedAt, 0, durationMs);
+const remainingMs = clamp(stopAt - now, 0, durationMs);
+const progress = durationMs ? elapsedMs / durationMs : 0;
+const modeSpeed = mode === "calm" ? 1.35 : mode === "aggressive" ? 0.62 : 1;
+const observeMs = clamp(durationMs * (0.07 * modeSpeed), mode === "aggressive" ? 4000 : mode === "calm" ? 8000 : 6000, mode === "calm" ? 25000 : mode === "aggressive" ? 10000 : 18000);
+const exitMs = clamp(durationMs * (mode === "calm" ? 0.18 : mode === "aggressive" ? 0.12 : 0.15), mode === "aggressive" ? 9000 : 12000, 45000);
+let phase = "build";
+if (elapsedMs < observeMs) phase = "observe";
+else if (remainingMs <= exitMs) phase = "exit";
+else if (progress > 0.62) phase = "manage";
+const activeWindow = Math.max(1, durationMs - observeMs - exitMs);
+const activeProgress = clamp((elapsedMs - observeMs) / activeWindow, 0, 1);
+return { now, startedAt, stopAt, durationMs, elapsedMs, remainingMs, progress, activeProgress, observeMs, exitMs, phase };
+}
+
+function botModeTempo(mode) {
+if (mode === "calm") return { globalCooldown: 9000, symbolCooldown: 18000, firstEntryScale: 0.35, deploymentCurve: 1.55 };
+if (mode === "aggressive") return { globalCooldown: 3500, symbolCooldown: 7000, firstEntryScale: 0.62, deploymentCurve: 0.88 };
+return { globalCooldown: 6000, symbolCooldown: 11000, firstEntryScale: 0.48, deploymentCurve: 1.18 };
+}
+
+function enhancedBotRecentPerformance(mode) {
+const trades = botState.modes[mode].trades.filter(trade => trade.side === "SELL").slice(0, 12);
+if (!trades.length) return { realizedBias: 0, winRate: 0.5 };
+const wins = trades.filter(trade => Number(trade.pnl || 0) > 0).length;
+const pnl = trades.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0);
+const capital = Math.max(1, botCapital(mode));
+return { realizedBias: clamp((pnl / capital) * 100, -10, 10), winRate: wins / trades.length };
+}
+
+function enhancedBotStrategyProfile(mode, snapshot) {
+const def = BOT_MODES[mode];
+const timing = botRunTiming(mode);
+const drawdownPct = snapshot.capital ? Math.max(0, ((snapshot.capital - snapshot.totalValue) / snapshot.capital) * 100) : 0;
+const performance = enhancedBotRecentPerformance(mode);
+const pressure = clamp(drawdownPct / 8, 0, 1);
+const learningBias = ((performance.winRate - 0.5) * 0.12) + (performance.realizedBias / 80);
+const lateCaution = timing.phase === "exit" ? 0.18 : timing.phase === "manage" ? 0.06 : 0;
+const deploymentAllowance = timing.phase === "observe" || timing.phase === "exit"
+? 0
+: clamp(Math.pow(timing.activeProgress, botModeTempo(mode).deploymentCurve), 0, 1);
+return {
+...def,
+mode,
+timing,
+drawdownPct,
+performance,
+deploymentAllowance,
+convictionDemand: clamp(def.convictionBias + pressure * 0.14 - learningBias + lateCaution, 0.24, 0.9),
+riskTolerance: clamp(def.riskAppetite - pressure * (0.36 - def.riskAppetite * 0.16) + learningBias - lateCaution, 0.14, 0.92),
+patienceLevel: clamp(def.patience + pressure * 0.18 + lateCaution - timing.activeProgress * def.riskAppetite * 0.08, 0.14, 0.94),
+};
+}
+
+function enhancedBotObservationNeed(profile) {
+const timingPenalty = profile.timing.phase === "observe" ? 2 : 0;
+return Math.round(clamp(3 + profile.patienceLevel * 4 + profile.convictionDemand * 1.2 - profile.riskTolerance, 3, 8) + timingPenalty);
+}
+
+function enhancedBotMinimumEdge(profile, context, snapshot) {
+const exposurePct = snapshot.capital ? snapshot.openValue / snapshot.capital : 0;
+const uncertainty = context.noisePct * 1.35 + Math.max(0, -context.agreement) * 8 + exposurePct * 7;
+const performanceAdjustment = profile.performance.realizedBias * 0.22 + (profile.performance.winRate - 0.5) * 5;
+const phaseAdjustment = profile.timing.phase === "observe" ? 14 : profile.timing.phase === "exit" ? 100 : profile.timing.phase === "manage" ? 4 : 0;
+return clamp(5 + profile.patienceLevel * 12 + profile.convictionDemand * 14 - profile.riskTolerance * 8 + uncertainty + phaseAdjustment - performanceAdjustment, 4, 120);
+}
+
+function enhancedBotBuildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0) {
+const volatility = Math.max(0.25, context.volatilityPct);
+const stopBase = 0.32 + volatility * (0.62 + profile.riskTolerance);
+const targetBase = 0.45 + volatility * (1 + profile.riskTolerance) + Math.max(0, confidence - 62) * 0.032;
+return {
+action,
+symbol: context.symbol,
+price: context.price,
+score: Math.round(confidence),
+confidence: clamp(confidence, 0, 100),
+risk: clamp(risk, 0, 100),
+style: profile.label,
+phase: profile.timing.phase,
+patience: profile.patienceLevel,
+conviction: profile.convictionDemand,
+notional,
+sellFraction,
+stopLossPct: clamp(stopBase, 0.35, profile.mode === "aggressive" ? 7.5 : 5.5),
+takeProfitPct: clamp(targetBase, 0.45, profile.mode === "calm" ? 5.5 : 8.5),
+};
+}
+
+function enhancedBotDecisionReason(decision, context) {
+const actionText = decision.action === "BUY" ? `buy $${formatPrice(decision.notional || 0)}` : decision.action.toLowerCase();
+return `${actionText}; ${decision.style} ${decision.phase}; confidence ${Math.round(decision.confidence)}; risk ${Math.round(decision.risk)}; samples ${context.samples}; pnl ${context.pnlPct >= 0 ? "+" : ""}${context.pnlPct.toFixed(2)}%; momentum ${context.shortMomentumPct >= 0 ? "+" : ""}${context.shortMomentumPct.toFixed(2)}%; noise ${context.noisePct.toFixed(2)}%; ${context.signalAction} signal ${context.signalConfidence}%`;
+}
+
+function botTradeCooldownReady(mode, symbol, profile) {
+const state = botState.modes[mode];
+const tempo = botModeTempo(mode);
+const now = Date.now();
+const globalReady = !state.lastActionAt || now - state.lastActionAt >= tempo.globalCooldown;
+const symbolReady = !state.lastTradeAt[symbol] || now - state.lastTradeAt[symbol] >= tempo.symbolCooldown;
+return globalReady && symbolReady;
+}
+
+function botPacedNotional(mode, context, profile, snapshot, edge, requiredEdge) {
+if (profile.timing.phase === "observe" || profile.timing.phase === "exit") return 0;
+if (!botTradeCooldownReady(mode, context.symbol, profile)) return 0;
+const tempo = botModeTempo(mode);
+const conviction = clamp((edge - requiredEdge + 18) / (mode === "aggressive" ? 58 : mode === "calm" ? 72 : 64), 0, 1.08);
+const exposureCap = snapshot.capital * profile.maxExposure * profile.deploymentAllowance;
+const currentValue = botHeldQuantity(mode, context.symbol) * context.price;
+const positionCap = snapshot.capital * profile.maxPosition * (tempo.firstEntryScale + profile.deploymentAllowance * (1 - tempo.firstEntryScale));
+const exposureRoom = Math.max(0, exposureCap - snapshot.openValue);
+const positionRoom = Math.max(0, positionCap - currentValue);
+const reservePct = mode === "calm" ? 0.18 + profile.drawdownPct / 60 : mode === "aggressive" ? 0.035 + profile.drawdownPct / 130 : 0.09 + profile.drawdownPct / 90;
+const spendable = Math.max(0, snapshot.cash - snapshot.capital * reservePct);
+const phaseSlice = snapshot.capital * profile.maxPosition * conviction * (0.35 + profile.deploymentAllowance * 0.65);
+return Math.min(spendable, exposureRoom, positionRoom, phaseSlice);
+}
+
+function enhancedBotBrainFor(mode, context, profile, snapshot) {
+const ready = context.samples >= enhancedBotObservationNeed(profile);
+const acceleration = Math.max(0, context.shortMomentumPct - context.noisePct * (mode === "aggressive" ? 0.12 : 0.22));
+const defense = mode === "calm" ? 1.1 : mode === "aggressive" ? 0.68 : 0.86;
+const confidence = clamp(
+40 + context.trendQuality * (mode === "aggressive" ? 1.12 : mode === "calm" ? 0.76 : 0.94)
++ context.agreement * (mode === "calm" ? 18 : 13)
++ acceleration * (mode === "aggressive" ? 13 : 7)
++ profile.performance.realizedBias * 0.8
+- profile.convictionDemand * (mode === "calm" ? 8 : 4),
+0,
+100,
+);
+const risk = clamp(context.riskLoad * defense + Math.max(0, -context.shortMomentumPct) * (mode === "calm" ? 9 : 5) + profile.drawdownPct * (mode === "aggressive" ? 1.4 : 0.9), 0, 100);
+const edge = confidence - risk * (mode === "aggressive" ? 0.26 : mode === "calm" ? 0.45 : 0.34) - profile.patienceLevel * 5 - profile.convictionDemand * 4;
+const requiredEdge = enhancedBotMinimumEdge(profile, context, snapshot);
+const holdDecision = enhancedBotBuildDecision("HOLD", context, profile, confidence, risk);
+
+if (!ready) return enhancedBotBuildDecision("WAIT", context, profile, confidence, risk);
+if (context.heldQty > 0) {
+const heldMs = Date.now() - (context.openedAt || Date.now());
+const minHoldMs = mode === "calm" ? 18000 : mode === "aggressive" ? 7000 : 11000;
+if (profile.timing.phase === "exit") {
+const urgency = clamp(1 - (profile.timing.remainingMs / Math.max(1, profile.timing.exitMs)), 0, 1);
+return enhancedBotBuildDecision(urgency > 0.62 ? "EXIT" : "REDUCE", context, profile, confidence, risk, 0, urgency > 0.62 ? 1 : clamp(0.35 + urgency * 0.45, 0.35, 0.8));
+}
+if (context.pnlPct <= -holdDecision.stopLossPct) return enhancedBotBuildDecision("EXIT", context, profile, confidence, risk, 0, 1);
+if (context.pnlPct >= holdDecision.takeProfitPct && heldMs >= minHoldMs) return enhancedBotBuildDecision("LOCK PROFIT", context, profile, confidence, risk, 0, mode === "calm" ? 0.75 : 0.55);
+if (heldMs >= minHoldMs && context.pnlPct > 0.2 && context.shortMomentumPct < -context.noisePct * 0.22) return enhancedBotBuildDecision("REDUCE", context, profile, confidence, risk, 0, mode === "calm" ? 0.7 : 0.45);
+return holdDecision;
+}
+
+const notional = botPacedNotional(mode, context, profile, snapshot, edge, requiredEdge);
+if (notional >= Math.max(0.25, snapshot.capital * 0.01) && edge >= requiredEdge) return enhancedBotBuildDecision("BUY", context, profile, confidence, risk, notional);
+return enhancedBotBuildDecision(profile.timing.phase === "observe" ? "WAIT" : "WATCH", context, profile, confidence, risk);
+}
+
+function enhancedBotOrderNotional(mode, candidate, cash) {
+const profile = enhancedBotStrategyProfile(mode, botPortfolioSnapshot(mode));
+const currentValue = botHeldQuantity(mode, candidate.symbol) * candidate.price;
+const positionRoom = Math.max(0, (botCapital(mode) * profile.maxPosition) - currentValue);
+return Math.min(cash, positionRoom, Number(candidate.notional || 0));
+}
+
+function enhancedRunBotModeDecision(mode, ranked) {
+const state = botState.modes[mode];
+state.rankings = ranked;
+state.decisions += 1;
+const snapshot = botPortfolioSnapshot(mode, ranked);
+const profile = enhancedBotStrategyProfile(mode, snapshot);
+const held = ranked.filter(item => botHeldQuantity(mode, item.symbol) > 0);
+let auditRow = null;
+
+for (const item of held) {
+const decision = enhancedBotBrainFor(mode, item, profile, snapshot);
+if ((decision.action === "EXIT" || decision.action === "REDUCE" || decision.action === "LOCK PROFIT") && item.heldQty > 0) {
+const qty = item.heldQty * (decision.sellFraction || 1);
+executeBotSell(mode, item, qty, enhancedBotDecisionReason(decision, item));
+state.lastActionAt = Date.now();
+auditRow = { ...decision, action: "SELL", reason: enhancedBotDecisionReason(decision, item) };
+botAppendRunAudit(mode, auditRow, ranked);
+return;
+}
+}
+
+const openSymbols = new Set(held.map(item => item.symbol));
+const candidates = ranked.filter(item => !openSymbols.has(item.symbol));
+const decisions = candidates.map(item => ({ context: item, decision: enhancedBotBrainFor(mode, item, profile, snapshot) }));
+const buy = decisions
+.filter(item => item.decision.action === "BUY")
+.sort((a, b) => (b.decision.confidence - b.decision.risk * 0.35) - (a.decision.confidence - a.decision.risk * 0.35))[0];
+
+if (buy) {
+const notional = enhancedBotOrderNotional(mode, buy.decision, snapshot.cash);
+if (notional >= Math.max(0.25, snapshot.capital * 0.01)) {
+executeBotBuy(mode, buy.context, notional, enhancedBotDecisionReason({ ...buy.decision, notional }, buy.context));
+state.lastActionAt = Date.now();
+auditRow = { ...buy.decision, action: "BUY", notional, reason: enhancedBotDecisionReason({ ...buy.decision, notional }, buy.context) };
+botAppendRunAudit(mode, auditRow, ranked);
+return;
+}
+}
+
+const top = [...decisions, ...held.map(context => ({ context, decision: enhancedBotBrainFor(mode, context, profile, snapshot) }))]
+.sort((a, b) => (b.decision.confidence - b.decision.risk * 0.25) - (a.decision.confidence - a.decision.risk * 0.25))[0];
+if (top) {
+const reason = enhancedBotDecisionReason(top.decision, top.context);
+logBotDecision(mode, { action: top.decision.action, symbol: top.context.symbol, score: top.decision.score, confidence: top.decision.confidence, risk: top.decision.risk, reason }, { key: `${profile.timing.phase}:${top.decision.action}:${top.context.symbol}:${state.decisions}`, throttleMs: 0 });
+botAppendRunAudit(mode, { ...top.decision, reason }, ranked);
+}
+}
+
+function enhancedRunBotDecision() {
+if (!botState.running) return;
+if (Date.now() >= botState.stopAt) {
+stopBot("run duration completed");
+return;
+}
+const symbols = botUniverseSymbols();
+if (!symbols.length) {
+botModeIds().forEach(mode => {
+const row = { action: "HOLD", reason: `${botUniverseLabel()} empty` };
+logBotDecision(mode, row, { key: "empty-universe", throttleMs: 5000 });
+botAppendRunAudit(mode, row, null);
+});
+renderBotStatus();
+scheduleBotDecision();
+return;
+}
+try {
+const universe = symbols
+.map(symbol => quotes.find(quote => quote.symbol === symbol))
+.filter(quote => quote && Number(quote.price || 0) > 0);
+if (!universe.length) {
+botModeIds().forEach(mode => {
+const row = { action: "HOLD", reason: `waiting for live ${botUniverseLabel()} prices` };
+logBotDecision(mode, row, { key: "no-prices", throttleMs: 5000 });
+botAppendRunAudit(mode, row, null);
+});
+renderBotStatus();
+scheduleBotDecision();
+return;
+}
+botModeIds().forEach(mode => {
+const ranked = botRankAnalyses(universe.map(quote => analyzeBotSymbol(mode, quote)));
+if (ranked.length) enhancedRunBotModeDecision(mode, ranked);
+});
+} catch (err) {
+botModeIds().forEach(mode => {
+const row = { action: "HOLD", reason: err.message || "bot decision failed" };
+logBotDecision(mode, row, { key: "decision-error", throttleMs: 5000 });
+botAppendRunAudit(mode, row, null);
+});
+}
+renderBotStatus();
+botPersistState();
+scheduleBotDecision();
 }
 
 window.editWalletBalance = function() {
-  const newBalance = prompt("Enter new starting balance ($). WARNING: This will reset your portfolio and trade history!", startingBalance);
+const newBalance = prompt("Enter new starting balance ($). WARNING: This will reset your portfolio and trade history!", startingBalance);
   if (newBalance !== null && !isNaN(parseFloat(newBalance))) {
     startingBalance = parseFloat(newBalance);
-    walletCash = startingBalance;
-    savedPortfolio = [];
-    tradeHistory = [];
-    updateStorage();
+walletCash = startingBalance;
+savedPortfolio = [];
+tradeHistory = [];
+pendingOrders = [];
+updateStorage();
     renderWallet();
     renderPortfolio();
     renderHistory();
@@ -251,6 +1694,12 @@ function websocketUrl(path) {
   url.pathname = path;
   url.search = "";
   return url.toString();
+}
+
+function clamp(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.min(max, Math.max(min, number));
 }
 
 function formatPrice(value) {
@@ -307,6 +1756,28 @@ async function fetchFromApi(path) {
   throw lastError || new Error("Backend unavailable");
 }
 
+async function postToApi(path, body) {
+  let lastError;
+  for (const candidate of API_CANDIDATES) {
+    try {
+      const response = await fetch(`${candidate}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || `${response.status} ${response.statusText}`);
+      }
+      apiBase = candidate;
+      return response.json();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Backend unavailable");
+}
+
 function setStatus(text, mode = "ok") {
   els.status.textContent = text;
   els.status.className = `api-status ${mode}`;
@@ -315,6 +1786,7 @@ function setStatus(text, mode = "ok") {
 function renderWatchlist() {
   els.watchlist.classList.remove("loading");
   els.watchlist.innerHTML = quotes
+    .filter((quote) => savedWatchlist.includes(quote.symbol))
     .map((quote, index) => {
       const prior = previousPrices.get(quote.symbol);
       const flash =
@@ -384,22 +1856,25 @@ function renderHistory() {
     return;
   }
   
-  els.historyList.innerHTML = filteredHistory.map(row => {
-    const sym = row.symbol;
-    const isActive = sym === activeSymbol ? "active" : "";
-    
-    if (q) {
-      const prior = previousPrices.get(sym);
-      flash = prior !== undefined && p !== prior ? (p > prior ? "flash-up" : "flash-down") : "";
-    }
+els.historyList.innerHTML = filteredHistory.map(row => {
+const sym = row.symbol;
+const isActive = sym === activeSymbol ? "active" : "";
+const q = quotes.find(quote => quote.symbol === sym);
+const p = q ? Number(q.price) : Number(row.price || 0);
+let flash = "";
+
+if (q) {
+const prior = previousPrices.get(sym);
+flash = prior !== undefined && p !== prior ? (p > prior ? "flash-up" : "flash-down") : "";
+}
     
     return `
       <div class="watch-row ${isActive} ${flash}" onclick="selectSymbol('${sym}')">
         <div class="watch-left">
           <strong>${sym}</strong>
         </div>
-        <div class="watch-right">
-          <strong>${p !== "--" ? "$" + formatPrice(p) : "--"}</strong>
+<div class="watch-right">
+<strong>${p !== "--" ? "$" + formatPrice(p) : "--"}</strong>
           <button class="add-btn" onclick="event.stopPropagation(); toggleWatchlist('${sym}')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
           </button>
@@ -413,11 +1888,11 @@ function executeTrade(symbol, side, qty, price, id = null) {
   const timestamp = new Date().toLocaleTimeString();
   const tradeValue = qty * price;
   
-  if (side === "buy") {
-    if (walletCash < tradeValue) {
-      alert("Not enough cash in wallet!");
-      return;
-    }
+if (side === "buy") {
+if (walletCash < tradeValue) {
+alert("Not enough cash in wallet!");
+return false;
+}
     walletCash -= tradeValue;
     // Determine the next color based on the number of existing lots for this symbol
     const existingLots = savedPortfolio.filter(p => p.symbol === symbol).length;
@@ -426,9 +1901,14 @@ function executeTrade(symbol, side, qty, price, id = null) {
     
     savedPortfolio.push({ id: newId, symbol, qty, avgPrice: price, color });
     tradeHistory.push({ type: "BUY", symbol, qty, price, timestamp });
-  } else if (side === "sell") {
-    let pnl = 0;
-    walletCash += tradeValue; // Add full sale amount to cash
+} else if (side === "sell") {
+let pnl = 0;
+const totalHeld = heldQuantity(symbol);
+if (totalHeld <= 0 || qty > totalHeld + 0.000001) {
+alert(`Not enough ${symbol} position to sell.`);
+return false;
+}
+walletCash += tradeValue; // Add full sale amount to cash
     if (id) {
       const existingIdx = savedPortfolio.findIndex(p => p.id === id);
       if (existingIdx > -1) {
@@ -462,8 +1942,10 @@ function executeTrade(symbol, side, qty, price, id = null) {
   updateStorage();
   renderPortfolio();
   renderHistory();
-  renderChart(); // Redraw chart to update order markers
-  renderWallet();
+renderChart(); // Redraw chart to update order markers
+renderWallet();
+renderTradeTicket();
+return true;
 }
 
 function renderTicker() {
@@ -569,6 +2051,8 @@ function renderFocus() {
   updateChartCaption();
   renderChart();
   renderSignals();
+  renderTradeTicket();
+  processPendingOrders();
 }
 
 function updateChartCaption(extra = "") {
@@ -702,8 +2186,10 @@ function applyTickToCandle(tick) {
     detail.bid = tick.bid ?? detail.bid;
     detail.ask = tick.ask ?? detail.ask;
     detail.lastTradeTime = tick.time || tick.fetchedAt;
+    processPendingOrders();
     scheduleFocusRender();
   } else {
+    processPendingOrders();
     renderChart();
   }
 }
@@ -876,6 +2362,19 @@ function renderChart() {
      });
      activeSeries.priceLines.push(pl);
   });
+
+  const activePendingOrders = pendingOrders.filter(order => order.symbol === activeSymbol);
+  activePendingOrders.forEach(order => {
+     const pl = activeSeries.createPriceLine({
+        price: order.triggerPrice,
+        color: order.side === "buy" ? '#22c55e' : '#ef4444',
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `${order.side.toUpperCase()} trigger ${order.direction === "above" ? ">=" : "<="}`,
+     });
+     activeSeries.priceLines.push(pl);
+  });
 }
 
 function scheduleFocusRender() {
@@ -929,6 +2428,9 @@ async function loadDesk() {
   if (activeTab === "watchlist") symbols = savedWatchlist;
   else if (activeTab === "portfolio") symbols = Array.from(new Set(savedPortfolio.map(p => p.symbol)));
   else if (activeTab === "history") symbols = savedHistory;
+  if (botState.running || botConfig.universeMode === "crypto") {
+    symbols = Array.from(new Set([...symbols, ...botUniverseSymbols()]));
+  }
   
   if (!symbols.length) {
     quotes = [];
@@ -953,6 +2455,8 @@ async function loadDesk() {
   renderPulse();
   renderSignals();
   renderWallet();
+  renderTradeTicket();
+  processPendingOrders();
 }
 
 async function loadCandles() {
@@ -1186,8 +2690,93 @@ function bindControls() {
     updateOrderTotal();
   }
 
-  els.btnBuy.addEventListener("click", () => openTradeModal("buy"));
-  els.btnSell.addEventListener("click", () => openTradeModal("sell"));
+  function focusTradeTicket(side) {
+    activeTicketSide = side;
+    renderTradeTicket();
+    els.ticketSize?.focus();
+    els.ticketSize?.select();
+  }
+
+els.btnBuy.addEventListener("click", () => focusTradeTicket("buy"));
+els.btnSell.addEventListener("click", () => focusTradeTicket("sell"));
+
+function openBotPage() {
+  hydrateBotForm();
+  renderBotStatus();
+  renderBotLog();
+  document.querySelector(".desk-shell")?.classList.add("hidden");
+  els.botModal?.classList.remove("hidden");
+}
+
+function closeBotPage() {
+  if (!botState.running) readBotConfig();
+  els.botModal?.classList.add("hidden");
+  document.querySelector(".desk-shell")?.classList.remove("hidden");
+}
+
+els.btnBot?.addEventListener("click", () => {
+  openBotPage();
+});
+els.botClose?.addEventListener("click", closeBotPage);
+els.botHome?.addEventListener("click", closeBotPage);
+els.botStart?.addEventListener("click", startBot);
+  els.botStop?.addEventListener("click", () => stopBot("stopped by user"));
+els.botClearLog?.addEventListener("click", () => {
+  botModeIds().forEach(mode => {
+    botState.modes[mode].logs = [];
+    renderBotLog(mode);
+  });
+  botPersistState();
+  appendTerminalLine("[BOT] audit logs cleared", "ok");
+});
+[els.botUniverseMode, document.querySelector("#bot-duration"), ...botModeIds().map(mode => botInputFor(mode))].forEach(input => {
+  input?.addEventListener("change", () => {
+    if (!botState.running) {
+      readBotConfig();
+      loadDesk();
+    }
+    renderBotStatus();
+  });
+});
+els.botReset?.addEventListener("click", () => {
+  resetBots();
+  appendTerminalLine("[BOT] bots reset", "ok");
+});
+els.ticketBuy?.addEventListener("click", () => focusTradeTicket("buy"));
+  els.ticketSell?.addEventListener("click", () => focusTradeTicket("sell"));
+
+  els.ticketModeAmount?.addEventListener("click", () => {
+    ticketSizeMode = "amount";
+    renderTradeTicket();
+  });
+  els.ticketModeShares?.addEventListener("click", () => {
+    ticketSizeMode = "shares";
+    renderTradeTicket();
+  });
+
+  els.ticketMarket?.addEventListener("click", () => {
+    ticketOrderType = "market";
+    renderTradeTicket();
+  });
+  els.ticketTrigger?.addEventListener("click", () => {
+    ticketOrderType = "trigger";
+    const price = activeMarketPrice();
+    if (els.ticketTriggerPrice && !els.ticketTriggerPrice.value && price) {
+      els.ticketTriggerPrice.value = price.toFixed(price >= 100 ? 2 : 4);
+    }
+    renderTradeTicket();
+    els.ticketTriggerPrice?.focus();
+    els.ticketTriggerPrice?.select();
+  });
+
+  els.ticketSize?.addEventListener("input", renderTradeTicket);
+  els.ticketTriggerPrice?.addEventListener("input", renderTradeTicket);
+  els.ticketSubmit?.addEventListener("click", placeTicketOrder);
+  [els.ticketSize, els.ticketTriggerPrice].forEach(input => {
+    input?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") placeTicketOrder();
+    });
+  });
 
   els.orderQty.addEventListener("input", updateOrderTotal);
   els.modalPrice.addEventListener("input", updateOrderTotal);
@@ -1304,31 +2893,16 @@ document.addEventListener("click", (e) => {
 
 window.addEventListener("resize", renderChart);
 window.addEventListener("resize", renderFocus);
+if ("ResizeObserver" in window && els.chart) {
+  const chartResizeObserver = new ResizeObserver(() => renderChart());
+  chartResizeObserver.observe(els.chart);
+}
 
 
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "k") {
     e.preventDefault();
     els.command.focus();
-  }
-});
-
-els.command.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    const val = e.target.value.trim();
-    if (val.startsWith("/")) {
-      const parts = val.slice(1).split(" ");
-      const cmd = parts[0].toLowerCase();
-      if (cmd === "chart" && parts[1]) {
-         const sym = parts[1].toUpperCase();
-         selectSymbol(sym);
-         // Optionally add to watchlist if not there
-      }
-      e.target.value = "";
-      els.command.blur();
-    } else if (searchResults.length > 0) {
-      selectSearchResult(0);
-    }
   }
 });
 
@@ -1351,33 +2925,198 @@ els.command.addEventListener("input", (e) => {
   }, 300);
 });
 
-async function handleCommand(cmdStr) {
-  const parts = cmdStr.split(" ");
-  const cmd = parts[0].toLowerCase();
-  
-  if (cmd === "/chart" || cmd === "/c") {
-    const sym = parts[1];
-    const intv = parts[2];
-    if (sym) {
-      const upperSym = sym.toUpperCase();
-      try {
-        await fetchFromApi(`/api/quotes/${encodeURIComponent(upperSym)}`);
-        addToHistory(upperSym);
-        selectSymbol(upperSym);
-      } catch (err) {
-        setStatus(`Symbol not found: ${upperSym}`, "error");
-      }
-    }
-    if (intv && ["1m", "2m", "5m", "15m", "1h", "1d", "1wk"].includes(intv)) {
-      activeInterval = intv;
-      document.querySelectorAll(".time-selector button").forEach(b => b.classList.toggle("active", b.dataset.int === intv));
-      fetchData();
-    }
-  } else if (cmd === "/clear") {
-    savedWatchlist = ["BTC-USD"];
-    localStorage.setItem("traderWatchlist", JSON.stringify(savedWatchlist));
-    fetchData();
+function appendTerminalLine(text, tone = "") {
+  if (!els.terminalOutput) return;
+  const line = document.createElement("div");
+  line.className = `terminal-line ${tone}`.trim();
+  line.textContent = text;
+  els.terminalOutput.appendChild(line);
+  while (els.terminalOutput.children.length > TERMINAL_MAX_LINES) {
+    els.terminalOutput.removeChild(els.terminalOutput.firstChild);
   }
+  els.terminalOutput.scrollTop = els.terminalOutput.scrollHeight;
+}
+
+function rememberTerminalCommand(cmdStr) {
+  if (!cmdStr || terminalHistory[terminalHistory.length - 1] === cmdStr) {
+    terminalHistoryIndex = terminalHistory.length;
+    return;
+  }
+  terminalHistory.push(cmdStr);
+  terminalHistory = terminalHistory.slice(-50);
+  localStorage.setItem(TERMINAL_HISTORY_KEY, JSON.stringify(terminalHistory));
+  terminalHistoryIndex = terminalHistory.length;
+}
+
+function terminalHelpText() {
+  return [
+    "/help",
+    "/quote SYMBOL",
+    "/chart SYMBOL [1m|5m|15m|1h|6h|1d]",
+    "/watch add|remove|list [SYMBOL]",
+    "/buy QTY [SYMBOL]",
+    "/sell QTY [SYMBOL]",
+    "/flatten [SYMBOL]",
+    "/portfolio",
+    "/cash AMOUNT",
+    "/sync",
+    "/clear"
+  ].join(" | ");
+}
+
+async function focusTerminalSymbol(symbol) {
+  const upperSym = symbolAlias(symbol).toUpperCase();
+  await fetchFromApi(`/api/quotes/${encodeURIComponent(upperSym)}`);
+  addToHistory(upperSym);
+  await selectSymbol(upperSym);
+  return upperSym;
+}
+
+function currentTerminalPrice(symbol = activeSymbol) {
+  const quote = quotes.find(q => q.symbol === symbol);
+  return quote ? quote.price : (detail ? (detail.lastTradePrice || detail.regularMarketPrice) : 0);
+}
+
+async function runTerminalCommand(cmdStr) {
+  const parts = cmdStr.trim().split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  appendTerminalLine(`> ${cmdStr}`, "command");
+
+  try {
+    if (cmd === "/help") {
+      appendTerminalLine(terminalHelpText(), "ok");
+      return;
+    }
+
+    if (cmd === "/quote" || cmd === "/q") {
+      const sym = parts[1] || activeSymbol;
+      if (!sym) {
+        appendTerminalLine("Usage: /quote SYMBOL", "warn");
+        return;
+      }
+      const upperSym = await focusTerminalSymbol(sym);
+      const price = currentTerminalPrice(upperSym);
+      appendTerminalLine(`${upperSym} ${price ? "$" + formatPrice(price) : "selected"}`, "ok");
+      return;
+    }
+
+    if (cmd === "/chart" || cmd === "/c") {
+      const sym = parts[1];
+      const intv = parts[2];
+      if (sym) await focusTerminalSymbol(sym);
+      if (intv && INTERVAL_SECONDS[intv]) {
+        activeInterval = intv;
+        setActiveButtons(els.timeframeControls, "interval", activeInterval);
+        await refreshAll();
+      }
+      appendTerminalLine(`Chart ${activeSymbol || "--"} ${activeInterval}`, "ok");
+      return;
+    }
+
+    if (cmd === "/watch") {
+      const action = (parts[1] || "list").toLowerCase();
+      const sym = parts[2] ? symbolAlias(parts[2]).toUpperCase() : activeSymbol;
+      if (action === "list") {
+        appendTerminalLine(savedWatchlist.join(", ") || "Watchlist is empty.", "ok");
+        return;
+      }
+      if (!sym) {
+        appendTerminalLine("Usage: /watch add|remove SYMBOL", "warn");
+        return;
+      }
+      if (action === "add") {
+        if (!savedWatchlist.includes(sym)) savedWatchlist.push(sym);
+        updateStorage();
+        await loadDesk();
+        appendTerminalLine(`Added ${sym} to watchlist.`, "ok");
+        return;
+      }
+      if (action === "remove") {
+        savedWatchlist = savedWatchlist.filter(item => item !== sym);
+        updateStorage();
+        await loadDesk();
+        appendTerminalLine(`Removed ${sym} from watchlist.`, "ok");
+        return;
+      }
+      appendTerminalLine("Usage: /watch add|remove|list [SYMBOL]", "warn");
+      return;
+    }
+
+    if (cmd === "/buy" || cmd === "/sell") {
+      const qty = Number(parts[1]);
+      const sym = parts[2] ? await focusTerminalSymbol(parts[2]) : activeSymbol;
+      if (!sym || !Number.isFinite(qty) || qty <= 0) {
+        appendTerminalLine(`Usage: ${cmd} QTY [SYMBOL]`, "warn");
+        return;
+      }
+      const price = currentTerminalPrice(sym);
+      if (!price) {
+        appendTerminalLine(`No live price for ${sym}.`, "error");
+        return;
+      }
+      const ok = executeTrade(sym, cmd === "/buy" ? "buy" : "sell", qty, price);
+      if (ok) appendTerminalLine(`${cmd.slice(1).toUpperCase()} ${qty} ${sym} @ $${formatPrice(price)}`, "ok");
+      return;
+    }
+
+    if (cmd === "/flatten") {
+      const sym = parts[1] ? await focusTerminalSymbol(parts[1]) : activeSymbol;
+      const price = currentTerminalPrice(sym);
+      const lots = savedPortfolio.filter(pos => pos.symbol === sym);
+      if (!sym || !price || lots.length === 0) {
+        appendTerminalLine(`No open ${sym || "symbol"} position to flatten.`, "warn");
+        return;
+      }
+      lots.forEach(lot => executeTrade(sym, "sell", lot.qty, price, lot.id));
+      appendTerminalLine(`Flattened ${sym} @ $${formatPrice(price)}`, "ok");
+      return;
+    }
+
+    if (cmd === "/portfolio") {
+      if (!savedPortfolio.length) {
+        appendTerminalLine(`Cash $${formatPrice(walletCash)} | no open positions`, "ok");
+        return;
+      }
+      const positions = savedPortfolio.map(pos => `${pos.symbol} ${pos.qty} @ $${formatPrice(pos.avgPrice)}`).join(" | ");
+      appendTerminalLine(`Cash $${formatPrice(walletCash)} | ${positions}`, "ok");
+      return;
+    }
+
+    if (cmd === "/cash") {
+      const amount = Number(parts[1]);
+      if (!Number.isFinite(amount) || amount < 0) {
+        appendTerminalLine("Usage: /cash AMOUNT", "warn");
+        return;
+      }
+      walletCash = amount;
+      updateStorage();
+      renderWallet();
+      appendTerminalLine(`Cash set to $${formatPrice(walletCash)}.`, "ok");
+      return;
+    }
+
+    if (cmd === "/sync") {
+      await loadDesk();
+      if (activeSymbol) await refreshAll();
+      appendTerminalLine("Desk synced.", "ok");
+      return;
+    }
+
+    if (cmd === "/clear") {
+      if (els.terminalOutput) els.terminalOutput.innerHTML = "";
+      appendTerminalLine("Terminal cleared.", "ok");
+      return;
+    }
+
+    appendTerminalLine(`Unknown command: ${cmd}. Type /help.`, "warn");
+  } catch (err) {
+    appendTerminalLine(err.message || "Command failed.", "error");
+    setStatus(err.message || "Command failed", "error");
+  }
+}
+
+async function handleCommand(cmdStr) {
+  await runTerminalCommand(cmdStr);
 }
 
 els.command.addEventListener("keydown", async (event) => {
@@ -1386,12 +3125,19 @@ els.command.addEventListener("keydown", async (event) => {
     if (!searchDropdown.classList.contains("hidden") && searchSelectedIndex < searchResults.length - 1) {
       searchSelectedIndex++;
       updateSearchSelection();
+    } else if (searchDropdown.classList.contains("hidden") && terminalHistory.length) {
+      terminalHistoryIndex = Math.min(terminalHistory.length, terminalHistoryIndex + 1);
+      els.command.value = terminalHistory[terminalHistoryIndex] || "";
     }
   } else if (event.key === "ArrowUp") {
     event.preventDefault();
     if (!searchDropdown.classList.contains("hidden") && searchSelectedIndex > 0) {
       searchSelectedIndex--;
       updateSearchSelection();
+    } else if (searchDropdown.classList.contains("hidden") && terminalHistory.length) {
+      terminalHistoryIndex = Math.max(0, terminalHistoryIndex - 1);
+      els.command.value = terminalHistory[terminalHistoryIndex] || "";
+      requestAnimationFrame(() => els.command.setSelectionRange(els.command.value.length, els.command.value.length));
     }
   } else if (event.key === "Enter") {
     if (!searchDropdown.classList.contains("hidden") && searchSelectedIndex >= 0) {
@@ -1403,7 +3149,8 @@ els.command.addEventListener("keydown", async (event) => {
     if (!requested) return;
     
     if (requested.startsWith("/")) {
-      handleCommand(requested);
+      rememberTerminalCommand(requested);
+      await handleCommand(requested);
       els.command.value = "";
       return;
     }
@@ -1423,7 +3170,25 @@ els.command.addEventListener("keydown", async (event) => {
   }
 });
 
+if (els.terminalClear) {
+  els.terminalClear.addEventListener("click", () => {
+    if (els.terminalOutput) els.terminalOutput.innerHTML = "";
+    appendTerminalLine("Terminal cleared.", "ok");
+  });
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) return;
+  event.preventDefault();
+  els.command.focus();
+});
+
 bindControls();
+hydrateBotForm();
+renderBotStatus();
+renderBotLog();
 connectStream(activeSymbol);
 refreshAll();
 startTimers();

@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 SYMBOLS = ["NVDA", "AAPL", "TSLA", "MSFT", "BTC-USD", "ETH-USD", "SOXL", "SPY"]
 CRYPTO_SYMBOLS = {"BTC-USD", "ETH-USD"}
+BOT_RUN_LOG_DIR = Path(__file__).resolve().parent / "bot_runs"
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 COINBASE_BOOK_URL = "https://api.exchange.coinbase.com/products/{symbol}/book"
@@ -503,6 +504,29 @@ def _market_clock() -> dict[str, Any]:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "trader-desk-api", "time": _now_iso()}
+
+
+@app.post("/api/bot-runs")
+async def save_bot_run(payload: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(payload.get("id") or f"run-{int(time.time())}")
+    safe_id = "".join(ch for ch in run_id if ch.isalnum() or ch in {"-", "_"}).strip("-_")
+    if not safe_id:
+        safe_id = f"run-{int(time.time())}"
+
+    BOT_RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    json_path = BOT_RUN_LOG_DIR / f"{safe_id}.json"
+    jsonl_path = BOT_RUN_LOG_DIR / f"{safe_id}.jsonl"
+
+    json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    with jsonl_path.open("w", encoding="utf-8") as handle:
+        for mode, rows in (payload.get("audit") or {}).items():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict):
+                    handle.write(json.dumps({"runId": safe_id, "mode": mode, **row}, sort_keys=True) + "\n")
+
+    return {"status": "saved", "id": safe_id, "json": str(json_path), "jsonl": str(jsonl_path)}
 
 
 @app.get("/api/symbols")

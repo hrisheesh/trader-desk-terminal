@@ -77,6 +77,7 @@
             <div style="display: flex; gap: 6px;">
               <button id="btn-buy" class="trade-btn buy-btn">Buy</button>
               <button id="btn-sell" class="trade-btn sell-btn">Sell</button>
+              <button id="btn-bot" class="trade-btn bot-btn">Bot</button>
               <button id="pin-button" class="pin-btn">Pin</button>
             </div>
           </div>
@@ -86,7 +87,7 @@
             <div><span>Volume</span><strong id="metric-volume">--</strong></div>
             <div><span>Venue</span><strong id="metric-venue">--</strong></div>
           </div>
-          <div id="chart-wrap" class="chart-wrap" style="position: relative; width: 100%; height: 350px;">
+          <div id="chart-wrap" class="chart-wrap">
             <div class="chart-toolbar" aria-label="Chart controls">
               <div id="timeframe-controls" class="segmented glass-panel">
                 <button type="button" data-interval="1m" class="active">1m</button>
@@ -117,6 +118,36 @@
               <button id="btn-lightning-flatten" class="action-btn flatten-btn">FLATTEN</button>
             </div>
           </div>
+
+          <section class="trade-ticket glass-panel" aria-label="Order ticket">
+            <div class="ticket-side">
+              <button type="button" id="ticket-buy" class="active" data-side="buy">Buy</button>
+              <button type="button" id="ticket-sell" data-side="sell">Sell</button>
+            </div>
+            <div class="ticket-field">
+              <label for="ticket-size">Size</label>
+              <input id="ticket-size" type="number" min="0" step="any" value="1000" />
+            </div>
+            <div class="ticket-mode" aria-label="Size mode">
+              <button type="button" id="ticket-mode-amount" class="active" data-mode="amount">$</button>
+              <button type="button" id="ticket-mode-shares" data-mode="shares">Shares</button>
+            </div>
+            <div class="ticket-type" aria-label="Order type">
+              <button type="button" id="ticket-market" class="active" data-type="market">Market</button>
+              <button type="button" id="ticket-trigger" data-type="trigger">Trigger</button>
+            </div>
+            <div class="ticket-field trigger-field">
+              <label for="ticket-trigger-price">Trigger</label>
+              <input id="ticket-trigger-price" type="number" min="0" step="any" placeholder="price" disabled />
+            </div>
+            <div class="ticket-preview">
+              <span id="ticket-preview">--</span>
+              <strong id="ticket-risk">--</strong>
+            </div>
+            <button type="button" id="ticket-submit" class="ticket-submit">Place</button>
+          </section>
+
+          <div id="pending-orders" class="pending-orders" aria-label="Pending trigger orders"></div>
 
           <p id="chart-caption" class="caption">Waiting for intraday candles.</p>
           <div class="lower-console">
@@ -165,6 +196,15 @@
             <h3>Alerts</h3>
             <div id="alerts-list" class="alerts-list"></div>
           </section>
+          <section class="terminal-box" aria-label="Trading terminal">
+            <div class="terminal-head">
+              <h3>Action Log</h3>
+              <button id="terminal-clear" type="button" title="Clear terminal">Clear</button>
+            </div>
+            <div id="terminal-output" class="terminal-output" aria-live="polite">
+              <div class="terminal-line ok">Type /help in CMD for commands.</div>
+            </div>
+          </section>
         </aside>
       </main>
 
@@ -173,7 +213,141 @@
         <div id="api-status" class="api-status">API: connecting</div>
       </footer>
     </div>
-    
+
+        <section id="bot-modal" class="bot-page hidden" aria-label="Autonomous paper trading bots">
+      <header class="bot-page-head">
+        <div class="bot-nav">
+          <button type="button" id="bot-close" class="bot-back">Back</button>
+          <button type="button" id="bot-home" class="bot-back">Home</button>
+        </div>
+        <div>
+          <p class="eyebrow">Autonomous Paper Trader</p>
+          <h2>Three Desk Bots</h2>
+        </div>
+        <div class="bot-actions">
+          <button type="button" id="bot-start" class="confirm-btn">Start</button>
+          <button type="button" id="bot-stop" class="confirm-btn danger hidden">Stop</button>
+        </div>
+      </header>
+
+      <main class="bot-page-grid bot-page-grid-v2">
+        <section class="bot-control-panel bot-control-panel-v2">
+          <div class="bot-status-card">
+            <span id="bot-state">Stopped</span>
+            <strong id="bot-summary">Three autonomous paper bots idle.</strong>
+          </div>
+          <label class="bot-duration-card" for="bot-duration">
+            <span>Run time</span>
+            <div>
+              <input type="number" id="bot-duration" min="1" max="1440" step="1" value="30" />
+              <em>minutes</em>
+            </div>
+          </label>
+          <label class="bot-duration-card bot-universe-card" for="bot-universe-mode">
+            <span>Universe</span>
+            <select id="bot-universe-mode">
+              <option value="watchlist">Watchlist</option>
+              <option value="crypto">Crypto only</option>
+            </select>
+          </label>
+          <button type="button" id="bot-clear-log" class="bot-clear-all">Clear audit logs</button>
+          <button type="button" id="bot-reset" class="bot-clear-all bot-reset-all">Reset bots</button>
+        </section>
+
+        <section class="bot-modes-grid" aria-label="Bot modes">
+          <article class="bot-mode-card calm" data-bot-mode="calm">
+            <div class="bot-mode-head">
+              <div>
+                <p class="eyebrow">Calm</p>
+                <h3>Thoughtful Compounding</h3>
+              </div>
+              <strong id="bot-state-calm">Idle</strong>
+            </div>
+            <label class="bot-capital-card" for="bot-capital-calm">
+              <span>Capital</span>
+              <div><span>$</span><input type="number" id="bot-capital-calm" min="0" step="10" value="100" /></div>
+            </label>
+            <div class="bot-metric-grid compact">
+              <div><span>Value</span><strong id="bot-value-calm">--</strong></div>
+              <div><span>P&L</span><strong id="bot-pnl-calm">--</strong></div>
+              <div><span>Cash</span><strong id="bot-cash-calm">--</strong></div>
+              <div><span>Deployed</span><strong id="bot-deployed-calm">--</strong></div>
+            </div>
+            <div class="bot-mode-columns">
+              <div>
+                <div class="bot-log-head compact"><h3>Portfolio</h3></div>
+                <div id="bot-positions-calm" class="bot-positions mode-scroll"></div>
+              </div>
+              <div>
+                <div class="bot-log-head compact"><h3>Audit</h3></div>
+                <div id="bot-log-calm" class="bot-log mode-scroll"></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="bot-mode-card normal" data-bot-mode="normal">
+            <div class="bot-mode-head">
+              <div>
+                <p class="eyebrow">Normal</p>
+                <h3>Balanced Trader</h3>
+              </div>
+              <strong id="bot-state-normal">Idle</strong>
+            </div>
+            <label class="bot-capital-card" for="bot-capital-normal">
+              <span>Capital</span>
+              <div><span>$</span><input type="number" id="bot-capital-normal" min="0" step="10" value="100" /></div>
+            </label>
+            <div class="bot-metric-grid compact">
+              <div><span>Value</span><strong id="bot-value-normal">--</strong></div>
+              <div><span>P&L</span><strong id="bot-pnl-normal">--</strong></div>
+              <div><span>Cash</span><strong id="bot-cash-normal">--</strong></div>
+              <div><span>Deployed</span><strong id="bot-deployed-normal">--</strong></div>
+            </div>
+            <div class="bot-mode-columns">
+              <div>
+                <div class="bot-log-head compact"><h3>Portfolio</h3></div>
+                <div id="bot-positions-normal" class="bot-positions mode-scroll"></div>
+              </div>
+              <div>
+                <div class="bot-log-head compact"><h3>Audit</h3></div>
+                <div id="bot-log-normal" class="bot-log mode-scroll"></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="bot-mode-card aggressive" data-bot-mode="aggressive">
+            <div class="bot-mode-head">
+              <div>
+                <p class="eyebrow">Aggressive</p>
+                <h3>Fast Momentum</h3>
+              </div>
+              <strong id="bot-state-aggressive">Idle</strong>
+            </div>
+            <label class="bot-capital-card" for="bot-capital-aggressive">
+              <span>Capital</span>
+              <div><span>$</span><input type="number" id="bot-capital-aggressive" min="0" step="10" value="100" /></div>
+            </label>
+            <div class="bot-metric-grid compact">
+              <div><span>Value</span><strong id="bot-value-aggressive">--</strong></div>
+              <div><span>P&L</span><strong id="bot-pnl-aggressive">--</strong></div>
+              <div><span>Cash</span><strong id="bot-cash-aggressive">--</strong></div>
+              <div><span>Deployed</span><strong id="bot-deployed-aggressive">--</strong></div>
+            </div>
+            <div class="bot-mode-columns">
+              <div>
+                <div class="bot-log-head compact"><h3>Portfolio</h3></div>
+                <div id="bot-positions-aggressive" class="bot-positions mode-scroll"></div>
+              </div>
+              <div>
+                <div class="bot-log-head compact"><h3>Audit</h3></div>
+                <div id="bot-log-aggressive" class="bot-log mode-scroll"></div>
+              </div>
+            </div>
+          </article>
+        </section>
+      </main>
+    </section>
+
     <!-- Order Modal -->
     <div id="order-modal" class="modal-overlay hidden">
       <div class="modal-box">
