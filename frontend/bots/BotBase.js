@@ -67,8 +67,12 @@ class TraderBot {
 
   buildDecision(action, context, profile, confidence, risk, notional = 0, sellFraction = 0, meta = {}) {
     const volatility = Math.max(0.25, context.volatilityPct);
-    const stopBase = (this.mode === "calm" ? 0.14 : this.mode === "aggressive" ? 0.24 : 0.18) + volatility * (0.16 + profile.riskTolerance * 0.18);
-    const targetBase = (this.mode === "calm" ? 0.08 : this.mode === "aggressive" ? 0.18 : 0.12) + volatility * (0.08 + profile.riskTolerance * 0.16) + Math.max(0, confidence - 64) * 0.012;
+    
+    // Professional Trader Upgrade: Wide realistic crypto targets
+    // Crypto moves 1-2% very easily. Stop losses and targets must accommodate this.
+    const stopBase = (this.mode === "calm" ? 1.0 : this.mode === "aggressive" ? 3.0 : 2.0) + volatility * (0.5 + profile.riskTolerance * 0.5);
+    const targetBase = (this.mode === "calm" ? 0.8 : this.mode === "aggressive" ? 2.5 : 1.5) + volatility * (0.5 + profile.riskTolerance * 0.5) + Math.max(0, confidence - 64) * 0.02;
+    
     return {
       action,
       symbol: context.symbol,
@@ -82,8 +86,8 @@ class TraderBot {
       conviction: profile.convictionDemand,
       notional,
       sellFraction,
-      stopLossPct: clamp(stopBase, this.mode === "calm" ? 0.16 : 0.22, this.mode === "aggressive" ? 2.4 : 1.8),
-      takeProfitPct: clamp(targetBase, this.mode === "calm" ? 0.08 : 0.12, this.mode === "calm" ? 1.3 : this.mode === "aggressive" ? 2.4 : 1.8),
+      stopLossPct: clamp(stopBase, this.mode === "calm" ? 0.8 : 1.5, this.mode === "aggressive" ? 6.0 : 4.0),
+      takeProfitPct: clamp(targetBase, this.mode === "calm" ? 0.6 : 1.2, this.mode === "calm" ? 3.0 : this.mode === "aggressive" ? 8.0 : 5.0),
       ...meta,
     };
   }
@@ -179,7 +183,7 @@ class TraderBot {
       const heldMs = Date.now() - (context.openedAt || Date.now());
       // Give trades some breathing room (e.g. at least 30s-120s)
       const minHoldMs = this.mode === "calm" ? 120000 : this.mode === "aggressive" ? 30000 : 60000;
-      const thesisFailed = context.shortMomentumPct < -Math.max(0.04, context.noisePct * (this.mode === "aggressive" ? 0.18 : 0.28)) && context.agreement < (this.mode === "calm" ? 0.08 : -0.02);
+      const thesisFailed = context.shortMomentumPct < -Math.max(0.4, context.noisePct * (this.mode === "aggressive" ? 1.8 : 2.8)) && context.agreement < (this.mode === "calm" ? -0.2 : -0.4);
       const lateFailure = context.pnlPct < 0 && thesisFailed && heldMs >= minHoldMs;
       // Realistic percentage target (1.0 = 1%)
       const scalpTarget = this.mode === "calm" ? 0.75 : this.mode === "aggressive" ? 2.5 : 1.25;
