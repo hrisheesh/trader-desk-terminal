@@ -831,6 +831,20 @@ function botVolatility(mode, symbol) {
   return clamp(Math.sqrt(variance), 0.15, 5);
 }
 
+
+window.botAnalyzeOrderBook = function(symbol) {
+  const book = window.activeOrderBook || { bids: [], asks: [] };
+  if (!book.bids.length && !book.asks.length) return { bidVol: 0, askVol: 0, imbalance: 0 };
+  const bidVol = book.bids.slice(0, 10).reduce((sum, r) => sum + Number(r.size || 0), 0);
+  const askVol = book.asks.slice(0, 10).reduce((sum, r) => sum + Number(r.size || 0), 0);
+  const total = bidVol + askVol;
+  return {
+    bidVol,
+    askVol,
+    imbalance: total > 0 ? ((bidVol - askVol) / total) * 100 : 0
+  };
+};
+
 function botSignalFor(symbol) {
   return signals.find(item => item.symbol === symbol);
 }
@@ -1135,16 +1149,21 @@ botAppendRunAudit(mode, { action: "SELL", symbol, price, reason }, null);
 }
 
 function stopBot(reason = "stopped") {
-if (botState.timer) clearTimeout(botState.timer);
-botState.timer = null;
-if (botState.running) {
-botCloseOpenPositions(reason === "run duration completed" ? "window complete; flattened open paper positions" : reason);
-botModeIds().forEach(mode => logBotDecision(mode, { action: "STOP", reason }, { key: `stop:${reason}`, throttleMs: 500 }));
-botFinishRunRecord(reason);
-}
-botState.running = false;
-botPersistState();
-renderBotStatus();
+  if (botState.timer) clearTimeout(botState.timer);
+  botState.timer = null;
+  if (window.botL2Timer) clearTimeout(window.botL2Timer);
+  window.botL2Timer = null;
+  if (botState.running) {
+    if (window.tradingBots) {
+        Object.values(window.tradingBots).forEach(bot => bot.stop());
+    }
+    botCloseOpenPositions(reason === "run duration completed" ? "window complete; flattened open paper positions" : reason);
+    botModeIds().forEach(mode => logBotDecision(mode, { action: "STOP", reason }, { key: `stop:${reason}`, throttleMs: 500 }));
+    botFinishRunRecord(reason);
+  }
+  botState.running = false;
+  botPersistState();
+  renderBotStatus();
 }
 
 function scheduleBotDecision() {
@@ -1157,6 +1176,14 @@ function scheduleBotDecision() {
 botState.timer = setTimeout(enhancedRunBotDecision, BOT_TICK_MS);
 }
 
+
+// Initialize OOP Bots
+window.tradingBots = {
+  calm: new CalmBot(),
+  normal: new NormalBot(),
+  aggressive: new AggressiveBot()
+};
+
 function startBot() {
 if (botState.running) return;
 readBotConfig();
@@ -1167,7 +1194,13 @@ botModeIds().forEach(mode => {
 logBotDecision(mode, { action: "START", reason: `$${formatPrice(botCapital(mode))} capital; ${botConfig.durationMin} minute run; scanning ${botUniverseSymbols().length} ${botUniverseLabel()} symbols` });
 });
   renderBotStatus();
-enhancedRunBotDecision();
+
+    botModeIds().forEach(mode => {
+        if (window.tradingBots && window.tradingBots[mode]) {
+            window.tradingBots[mode].start();
+        }
+    });
+
 }
 
 function runBotModeDecisionLegacy(mode, ranked) {
@@ -1518,36 +1551,6 @@ function runBotModeDecision(mode, ranked) {
   logBotDecision(mode, { action, symbol: top.context.symbol, score: top.decision.score, reason: `${botDecisionReason(top.decision, top.context)}${sampleText}` }, { key: `${action}:${top.context.symbol}:${Math.round(top.decision.confidence / 5)}`, throttleMs: action === "WAIT" ? 2500 : 4500 });
 }
 
-function runBotDecision() {
-  if (!botState.running) return;
-  const symbols = botUniverseSymbols();
-  if (!symbols.length) {
-    botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: `${botUniverseLabel()} empty` }, { key: "empty-universe", throttleMs: 5000 }));
-    renderBotStatus();
-    scheduleBotDecision();
-    return;
-  }
-  try {
-    const universe = symbols
-        .map(symbol => quotes.find(quote => quote.symbol === symbol))
-        .filter(quote => quote && Number(quote.price || 0) > 0 && Number(quote.price || 0) >= 0.001);
-    if (!universe.length) {
-      botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: `waiting for live ${botUniverseLabel()} prices` }, { key: "no-prices", throttleMs: 5000 }));
-      renderBotStatus();
-      scheduleBotDecision();
-      return;
-    }
-    botModeIds().forEach(mode => {
-      const ranked = botRankAnalyses(universe.map(quote => analyzeBotSymbol(mode, quote)));
-      if (ranked.length) runBotModeDecision(mode, ranked);
-    });
-  } catch (err) {
-    botModeIds().forEach(mode => logBotDecision(mode, { action: "HOLD", reason: err.message || "bot decision failed" }, { key: "decision-error", throttleMs: 5000 }));
-  }
-  renderBotStatus();
-  botPersistState();
-  scheduleBotDecision();
-}
 function botRunTiming(mode = "normal") {
 const now = Date.now();
 const startedAt = Number(botState.startedAt || now);
@@ -2267,6 +2270,10 @@ function renderChart() {
   
   uniqueData.sort((a, b) => a.time - b.time);
 
+  if (uniqueData.length === 0) {
+      console.error("CRITICAL: uniqueData is empty despite chartCandles length:", chartCandles.length);
+  }
+
   // Extract Volume Data
   const volumeData = uniqueData.map(d => ({
     time: d.time,
@@ -2543,9 +2550,22 @@ function connectStream(symbol) {
 
   tickSocket = new WebSocket(websocketUrl(`/api/stream/${encodeURIComponent(symbol)}`));
   tickSocket.addEventListener("message", (event) => {
-    const tick = JSON.parse(event.data);
-    applyTickToCandle(tick);
-    setStatus(`STREAM ${symbol} ${shortTime(tick.time || tick.fetchedAt)}`, "ok");
+    try {
+      const tick = JSON.parse(event.data);
+      
+      // Handle L2 Order Book updates
+      if (tick.type === "l2update" || tick.type === "snapshot") {
+         if (!window.activeOrderBook) window.activeOrderBook = { bids: [], asks: [] };
+         if (tick.bids) window.activeOrderBook.bids = tick.bids;
+         if (tick.asks) window.activeOrderBook.asks = tick.asks;
+         return;
+      }
+      
+      applyTickToCandle(tick);
+      setStatus(`STREAM ${symbol} ${shortTime(tick.time || tick.fetchedAt)}`, "ok");
+    } catch (e) {
+      console.error("Stream parse error", e);
+    }
   });
   tickSocket.addEventListener("error", () => setStatus(`Stream unavailable for ${symbol}`, "error"));
 }
