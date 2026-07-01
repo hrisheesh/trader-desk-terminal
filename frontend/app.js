@@ -134,6 +134,7 @@ let activeInterval = "1m";
 let chartMode = "candles";
 let previousPrices = new Map();
 let quotes = [];
+window.getBotUniverseQuotes = () => quotes;
 let activeChartScale = null;
 let pulse = null;
 let alerts = [];
@@ -361,6 +362,8 @@ let botConfig = (() => {
     return { ...defaultBotConfig };
   }
 })();
+window.botState = undefined;
+Object.defineProperty(window, "botState", { get: () => botState, set: (v) => botState = v });
 let botState = (() => {
 try {
 const stored = JSON.parse(localStorage.getItem(BOT_STATE_KEY));
@@ -3336,3 +3339,19 @@ connectStream(activeSymbol);
 refreshAll();
 startTimers();
 
+
+// Explicit Window Exports for OOP Bots
+window.BOT_STALE_TICK_LIMIT = BOT_STALE_TICK_LIMIT;
+window.renderBotStatus = renderBotStatus;
+window.botPortfolioSnapshot = botPortfolioSnapshot;
+window.botHeldQuantity = botHeldQuantity;
+window.executeBotSell = executeBotSell;
+window.executeBotBuy = executeBotBuy;
+window.logBotDecision = logBotDecision;
+window.botCapital = botCapital;
+window.botAverageEntry = botAverageEntry;
+window.botSignalFor = botSignalFor;
+window.botHistoryStats = botHistoryStats;
+window.botMarketAgreement = botMarketAgreement;
+window.clamp = clamp;
+window.rememberBotPrice = rememberBotPrice;

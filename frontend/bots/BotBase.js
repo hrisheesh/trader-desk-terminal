@@ -30,11 +30,12 @@ class TraderBot {
   async tick() {
     if (!this.running || this.activeSwarms > 0) return; // Prevent overlapping runs for this specific bot
 
-    const universe = window.marketDataCache ? Object.values(window.marketDataCache) : [];
+    const universe = typeof window.getBotUniverseQuotes === "function" ? window.getBotUniverseQuotes() : [];
+    console.log(`[${this.mode}] Universe length:`, universe.length);
     if (!universe.length) return;
 
     this.activeSwarms = universe.length;
-    window.botSwarmStats[this.mode] = this.activeSwarms;
+    if(!window.botSwarmStats) window.botSwarmStats = {}; window.botSwarmStats[this.mode] = this.activeSwarms;
     if (window.renderBotStatus) window.renderBotStatus();
 
     try {
@@ -43,7 +44,7 @@ class TraderBot {
           return await this.worker.evaluate(quote);
         } finally {
           this.activeSwarms--;
-          window.botSwarmStats[this.mode] = this.activeSwarms;
+          if(!window.botSwarmStats) window.botSwarmStats = {}; window.botSwarmStats[this.mode] = this.activeSwarms;
           if (window.renderBotStatus) window.renderBotStatus();
         }
       });
@@ -58,7 +59,7 @@ class TraderBot {
     } catch (e) {
       console.error(`[${this.mode}] Swarm error:`, e);
       this.activeSwarms = 0;
-      window.botSwarmStats[this.mode] = 0;
+      if(!window.botSwarmStats) window.botSwarmStats = {}; window.botSwarmStats[this.mode] = 0;
     }
   }
 
