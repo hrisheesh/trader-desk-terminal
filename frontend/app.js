@@ -1173,7 +1173,9 @@ function scheduleBotDecision() {
     stopBot("run duration completed");
     return;
   }
-botState.timer = setTimeout(enhancedRunBotDecision, BOT_TICK_MS);
+  renderBotStatus();
+  botState.timer = setTimeout(scheduleBotDecision, 1000);
+}
 }
 
 
@@ -1194,6 +1196,7 @@ botModeIds().forEach(mode => {
 logBotDecision(mode, { action: "START", reason: `$${formatPrice(botCapital(mode))} capital; ${botConfig.durationMin} minute run; scanning ${botUniverseSymbols().length} ${botUniverseLabel()} symbols` });
 });
   renderBotStatus();
+  scheduleBotDecision();
 
     botModeIds().forEach(mode => {
         if (window.tradingBots && window.tradingBots[mode]) {
