@@ -2532,6 +2532,17 @@ async function refreshAll() {
   }
 }
 
+
+function applyQuoteToDOM(quote) {
+  if (!quote || !quote.symbol) return;
+  const existingQuoteIdx = quotes.findIndex(q => q.symbol === quote.symbol);
+  if (existingQuoteIdx > -1) {
+    quotes[existingQuoteIdx] = { symbol: quote.symbol, price: quote.price, change: quote.change, changePercent: quote.changePercent };
+  } else {
+    quotes.push({ symbol: quote.symbol, price: quote.price, change: quote.change, changePercent: quote.changePercent });
+  }
+}
+
 async function refreshFlowOnly() {
   try {
     await loadFlow(activeSymbol);
