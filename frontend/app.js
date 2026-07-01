@@ -1176,7 +1176,6 @@ function scheduleBotDecision() {
   renderBotStatus();
   botState.timer = setTimeout(scheduleBotDecision, 1000);
 }
-}
 
 
 // Initialize OOP Bots
