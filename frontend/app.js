@@ -16,6 +16,40 @@ const BOT_CRYPTO_SYMBOLS = [
   "LTC-USD",
   "BCH-USD",
   "UNI-USD",
+  "ATOM-USD",
+  "ETC-USD",
+  "XLM-USD",
+  "FIL-USD",
+  "ALGO-USD",
+  "ICP-USD",
+  "HBAR-USD",
+  "NEAR-USD",
+  "APT-USD",
+  "SUI-USD",
+  "OP-USD",
+  "ARB-USD",
+  "INJ-USD",
+  "AAVE-USD",
+  "SHIB-USD",
+  "PEPE-USD",
+  "BONK-USD",
+  "WIF-USD",
+  "FLOKI-USD",
+  "TON-USD",
+  "POL-USD",
+  "CRO-USD",
+  "VET-USD",
+  "GRT-USD",
+  "STX-USD",
+  "IMX-USD",
+  "SEI-USD",
+  "TIA-USD",
+  "TAO-USD",
+  "FET-USD",
+  "ENA-USD",
+  "ONDO-USD",
+  "CRV-USD",
+  "ZEC-USD",
 ];
 const INTERVAL_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400 };
 const VISIBLE_BARS = { "1m": 80, "5m": 84, "15m": 80, "1h": 72, "6h": 60, "1d": 90 };
@@ -59,7 +93,7 @@ const GLOBAL_MARKETS = [
   { name: "Canada (TSX)", tz: "America/Toronto", open: "09:30", close: "16:00", symbols: ["RY", "TD", "SHOP"] },
   { name: "Saudi Arabia (Tadawul)", tz: "Asia/Riyadh", open: "10:00", close: "15:00", symbols: ["2222.SR", "1120.SR", "2010.SR"] },
   { name: "Switzerland (SIX)", tz: "Europe/Zurich", open: "09:00", close: "17:30", symbols: ["NSRGY", "ROG.SW", "NOVN.SW"] },
-  { name: "Crypto 24/7", tz: "UTC", open: "00:00", close: "23:59", symbols: ["BTC-USD", "ETH-USD", "SOL-USD"] }
+  { name: "Crypto 24/7", tz: "UTC", open: "00:00", close: "23:59", symbols: BOT_CRYPTO_SYMBOLS }
 ];
 
 function isMarketOpen(market) {
@@ -122,7 +156,8 @@ let startingBalance = (() => {
 let tradeHistory = (() => {
   try {
     const data = JSON.parse(localStorage.getItem("trader-desk-trade-history"));
-    return Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) return [];
+    return data.slice(-500);
   } catch (e) {
     return [];
   }
@@ -155,6 +190,7 @@ let liveCandleUpdates = new Map();
 let emaVisible = true;
 let pendingFocusRender = false;
 let refreshTimer = null;
+let deskLoadInFlight = false;
 let flowTimer = null;
 let candleTimer = null;
 let tickSocket = null;
@@ -193,7 +229,7 @@ const els = {
   pulse: document.querySelector("#pulse-grid"),
   movers: document.querySelector("#movers-list"),
   alerts: document.querySelector("#alerts-list"),
-  signals: document.querySelector("#signal-list"),
+  signals: document.querySelector("#signals-list"),
   timeframeControls: document.querySelector("#timeframe-controls"),
   chartModeControls: document.querySelector("#chart-mode-controls"),
   railTabs: document.querySelector("#rail-tabs"),
@@ -210,22 +246,10 @@ const els = {
   botStop: document.querySelector("#bot-stop"),
   botState: document.querySelector("#bot-state"),
   botSummary: document.querySelector("#bot-summary"),
-  botLog: document.querySelector("#bot-log"),
   botClearLog: document.querySelector("#bot-clear-log"),
   botReset: document.querySelector("#bot-reset"),
   botUniverseMode: document.querySelector("#bot-universe-mode"),
   botHome: document.querySelector("#bot-home"),
-  botCapital: document.querySelector("#bot-capital"),
-  botUniverse: document.querySelector("#bot-universe"),
-  botValue: document.querySelector("#bot-value"),
-  botPnl: document.querySelector("#bot-pnl"),
-  botDeployed: document.querySelector("#bot-deployed"),
-  botCashRoom: document.querySelector("#bot-cash-room"),
-  botRealized: document.querySelector("#bot-realized"),
-  botDecisions: document.querySelector("#bot-decisions"),
-  botRankings: document.querySelector("#bot-rankings"),
-  botPositions: document.querySelector("#bot-positions"),
-  botTrades: document.querySelector("#bot-trades"),
   orderModal: document.querySelector("#order-modal"),
   modalClose: document.querySelector("#modal-close"),
   modalConfirm: document.querySelector("#modal-confirm"),
@@ -283,13 +307,16 @@ const BOT_CONFIG_KEY = "trader-desk-bot-config-v3";
 const BOT_STATE_KEY = "trader-desk-bot-state-v4";
 const BOT_RUNS_KEY = "trader-desk-bot-runs-v1";
 const BOT_PRICE_MEMORY_LIMIT = 200; // 100 seconds at 500ms ticks
-const BOT_MIN_TRADE_NOTIONAL = 10;  // $10 minimum trade
+const BOT_MIN_TRADE_NOTIONAL = 0.25; // paper minimum; scales with account size below
 const BOT_TICK_MS = 500;
 const BOT_FEE_RATE = 0.001; // 0.1% per side (maker/taker average)
 const BOT_STALE_TICK_LIMIT = 20; // Skip symbols with no price change for 20+ ticks
 const BOT_FULLY_DEPLOYED_LOG_MS = 10000;
 const BOT_RUN_HISTORY_LIMIT = 20;
 const BOT_RUN_AUDIT_LIMIT = 12000;
+// Keep the live audit rich in memory, but keep browser storage and the API
+// payload below the browser/API size ceilings during long runs.
+const BOT_RUN_PERSIST_AUDIT_LIMIT = 600;
 const BOT_MODES = {
   calm: {
     label: "Calm",
@@ -339,9 +366,25 @@ const BOT_MODES = {
 };
 const defaultBotConfig = {
   durationMin: 30,
+  observeMinutes: 2,
+  strategyMode: "swarm",
+  polymarketInterval: "15m",
+  polymarketCapital: 100,
+  polymarketModes: { calm: 100, normal: 100, aggressive: 100 },
   universeMode: "watchlist",
+  feesEnabled: false,
+  multiplierEnabled: false,
+  enabled: { calm: true, normal: true, aggressive: true },
   modes: Object.fromEntries(Object.entries(BOT_MODES).map(([mode, def]) => [mode, { capital: def.capital }])),
 };
+function botFeeRate() {
+  return botConfig.feesEnabled === true ? BOT_FEE_RATE : 0;
+}
+window.botFeeRate = botFeeRate;
+function botMultiplierEnabled() {
+  return botConfig.multiplierEnabled === true;
+}
+window.botMultiplierEnabled = botMultiplierEnabled;
 function createBotModeState() {
 return { positions: {}, trades: [], logs: [], rankings: [], priceMemory: {}, lastTradeAt: {}, lastActionAt: 0, realized: 0, decisions: 0, lastLog: {} };
 }
@@ -357,7 +400,12 @@ function createBotState() {
 let botConfig = (() => {
   try {
     const stored = JSON.parse(localStorage.getItem(BOT_CONFIG_KEY));
-    return { ...defaultBotConfig, ...(stored || {}), modes: { ...defaultBotConfig.modes, ...((stored && stored.modes) || {}) } };
+    return {
+      ...defaultBotConfig,
+      ...(stored || {}),
+      enabled: { ...defaultBotConfig.enabled, ...((stored && stored.enabled) || {}) },
+      modes: { ...defaultBotConfig.modes, ...((stored && stored.modes) || {}) },
+    };
   } catch (e) {
     return { ...defaultBotConfig };
   }
@@ -376,6 +424,71 @@ Object.keys(BOT_MODES).forEach(mode => {
 return createBotState();
 }
 })();
+const polymarketState = {
+  running: false,
+  startedAt: null,
+  stopAt: null,
+  interval: "15m",
+  capital: 100,
+  cash: 100,
+  realized: 0,
+  position: null,
+  trades: [],
+  history: [],
+  learning: { trades: 0, wins: 0, losses: 0, pnl: 0, bySide: {}, byEdge: {} },
+  latest: null,
+  lastDecision: null,
+  error: "",
+  audit: [],
+  modelSide: null,
+  modelSideCount: 0,
+  lastExitAt: 0,
+  swarms: {},
+  positions: {},
+  windowSeen: {},
+  sessionAligned: false,
+  sessionSlug: null,
+  sessionEnd: null,
+  inFlight: false,
+};
+window.polymarketState = polymarketState;
+const polymarketSwarmEngine = window.PolymarketSwarmEngine ? new window.PolymarketSwarmEngine(polymarketState) : null;
+window.polymarketSwarmEngine = polymarketSwarmEngine;
+let polymarketPreviewInFlight = false;
+let polymarketPreviewAt = 0;
+
+async function refreshPolymarketPreview(force = false) {
+  if (botConfig.strategyMode !== "polymarket" || botState.running || polymarketPreviewInFlight) return;
+  if (!force && Date.now() - polymarketPreviewAt < 5_000) return;
+  polymarketPreviewInFlight = true;
+  polymarketPreviewAt = Date.now();
+  polymarketState.interval = botConfig.polymarketInterval || "15m";
+  try {
+    const data = await fetchFromApi("/api/polymarket/btc");
+    polymarketState.latest = data;
+    const focus = (data.markets || []).find(row => row.interval === polymarketState.interval);
+    const history = focus ? data.spotHistory?.[focus.slug] : null;
+    polymarketState.history = Array.isArray(history)
+      ? history.map(point => ({ time: Number(point.time), price: Number(point.price) })).filter(point => point.time > 0 && point.price > 0).slice(-1_800)
+      : [];
+    polymarketState.error = "";
+  } catch (error) {
+    polymarketState.error = error.message || "Polymarket preview unavailable";
+  } finally {
+    polymarketPreviewInFlight = false;
+    renderPolymarketPanel();
+    renderBotStatus();
+  }
+}
+try {
+  const savedPolymarketLearning = JSON.parse(localStorage.getItem("trader-desk-polymarket-learning-v1"));
+  if (savedPolymarketLearning) polymarketState.learning = {
+    ...polymarketState.learning,
+    ...savedPolymarketLearning,
+    bySide: { ...polymarketState.learning.bySide, ...(savedPolymarketLearning.bySide || {}) },
+    byEdge: { ...polymarketState.learning.byEdge, ...(savedPolymarketLearning.byEdge || {}) },
+  };
+} catch (e) {}
 let botRuns = (() => {
 try {
 const stored = JSON.parse(localStorage.getItem(BOT_RUNS_KEY));
@@ -384,6 +497,11 @@ return Array.isArray(stored) ? stored : [];
 return [];
 }
 })();
+window.botLearning = new window.LearningEngine();
+try {
+  const stored = JSON.parse(localStorage.getItem("trader-desk-bot-learning-v1"));
+  if (stored && stored.modes) window.botLearning.hydrate(stored);
+} catch (e) {}
 let activeBotRun = null;
 function updateStorage() {
   watchlists[activeWatchlistName] = savedWatchlist;
@@ -424,9 +542,9 @@ function updateLightningTracker() {
   
   const avgEntry = totalCost / totalQty;
   const pnl = (currentPrice - avgEntry) * totalQty;
-  const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-  
-  els.posTracker.innerHTML = `<span>${totalQty.toFixed(2)} @ $${avgEntry.toFixed(2)}</span> | P&L: <span style="color: ${pnlColor}">$${pnl.toFixed(2)}</span>`;
+  const pnlTone = pnl >= 0 ? "positive" : "negative";
+
+  els.posTracker.innerHTML = `<span>${totalQty.toFixed(2)} @ $${avgEntry.toFixed(2)}</span> | P&L: <span class="${pnlTone}">$${pnl.toFixed(2)}</span>`;
   els.posTracker.className = "active-pos";
 }
 
@@ -592,6 +710,23 @@ function botModeIds() {
   return Object.keys(BOT_MODES);
 }
 
+function botModeEnabled(mode) {
+  return botConfig.enabled?.[mode] !== false;
+}
+
+function enabledBotModeIds() {
+  return botModeIds().filter(botModeEnabled);
+}
+
+function syncBotEnableInputs() {
+  botModeIds().forEach(mode => {
+    const checked = botModeEnabled(mode);
+    [document.querySelector(`#bot-enabled-${mode}`), document.querySelector(`#polymarket-enabled-${mode}`)].forEach(input => {
+      if (input) input.checked = checked;
+    });
+  });
+}
+
 function botModeEl(mode, name) {
   return document.querySelector(`#bot-${name}-${mode}`);
 }
@@ -602,7 +737,24 @@ function botInputFor(mode) {
 
 function readBotConfig() {
   const duration = Number(document.querySelector("#bot-duration")?.value);
+  const observe = Number(document.querySelector("#bot-observe")?.value);
+  const strategyMode = document.querySelector("#bot-strategy-mode")?.value || "swarm";
+  const polymarketInterval = document.querySelector("#polymarket-interval")?.value || "15m";
+  const polymarketCapital = Number(document.querySelector("#polymarket-capital-calm")?.value);
+  const polymarketModes = {};
+  const enabled = {};
+  botModeIds().forEach(mode => {
+    const input = document.querySelector(`#polymarket-capital-${mode}`);
+    const value = Number(input?.value);
+    polymarketModes[mode] = Number.isFinite(value) ? Math.max(1, value) : (botConfig.polymarketModes?.[mode] || defaultBotConfig.polymarketCapital);
+    const modeInput = strategyMode === "polymarket"
+      ? document.querySelector(`#polymarket-enabled-${mode}`)
+      : document.querySelector(`#bot-enabled-${mode}`);
+    enabled[mode] = modeInput ? modeInput.checked : botModeEnabled(mode);
+  });
   const universeMode = els.botUniverseMode?.value || "crypto";
+  const feesEnabled = document.querySelector("#bot-fees-enabled")?.checked === true;
+  const multiplierEnabled = document.querySelector("#bot-multiplier-enabled")?.checked === true;
   const modes = {};
   botModeIds().forEach(mode => {
     const input = botInputFor(mode);
@@ -611,7 +763,15 @@ function readBotConfig() {
   });
   botConfig = {
     durationMin: Number.isFinite(duration) ? clamp(Math.max(1, duration), 1, 1440) : defaultBotConfig.durationMin,
+    observeMinutes: Number.isFinite(observe) ? clamp(Math.max(0, observe), 0, 240) : defaultBotConfig.observeMinutes,
+    strategyMode: strategyMode === "polymarket" ? "polymarket" : "swarm",
+    polymarketInterval: polymarketInterval === "5m" ? "5m" : "15m",
+    polymarketCapital: Number.isFinite(polymarketCapital) ? Math.max(1, polymarketCapital) : defaultBotConfig.polymarketCapital,
+    polymarketModes,
     universeMode,
+    feesEnabled,
+    multiplierEnabled,
+    enabled,
     modes,
   };
   localStorage.setItem(BOT_CONFIG_KEY, JSON.stringify(botConfig));
@@ -621,34 +781,69 @@ function readBotConfig() {
 function hydrateBotForm() {
 const duration = document.querySelector("#bot-duration");
 if (duration) duration.value = botConfig.durationMin || defaultBotConfig.durationMin;
+const observe = document.querySelector("#bot-observe");
+if (observe) observe.value = botConfig.observeMinutes ?? defaultBotConfig.observeMinutes;
+const strategyMode = document.querySelector("#bot-strategy-mode");
+if (strategyMode) strategyMode.value = botConfig.strategyMode || defaultBotConfig.strategyMode;
+const polymarketInterval = document.querySelector("#polymarket-interval");
+if (polymarketInterval) polymarketInterval.value = botConfig.polymarketInterval || defaultBotConfig.polymarketInterval;
+botModeIds().forEach(mode => {
+  const input = document.querySelector(`#polymarket-capital-${mode}`);
+  if (input) input.value = botConfig.polymarketModes?.[mode] ?? botConfig.polymarketCapital ?? defaultBotConfig.polymarketCapital;
+});
+syncBotEnableInputs();
 if (els.botUniverseMode) {
   // Ensure the option exists before setting it, handled mostly in updateWatchlistUI, but safe to assign
   els.botUniverseMode.value = botConfig.universeMode || "crypto";
 }
+const feesToggle = document.querySelector("#bot-fees-enabled");
+if (feesToggle) feesToggle.checked = botConfig.feesEnabled === true;
+const multiplierToggle = document.querySelector("#bot-multiplier-enabled");
+if (multiplierToggle) multiplierToggle.checked = botConfig.multiplierEnabled === true;
 botModeIds().forEach(mode => {
 const input = botInputFor(mode);
 if (input) input.value = botConfig.modes?.[mode]?.capital ?? BOT_MODES[mode].capital;
 });
 }
 
+function compactBotRun(run) {
+  const audits = run?.audit || {};
+  const auditCounts = run?.auditCounts && typeof run.auditCounts === "object"
+    ? { ...run.auditCounts }
+    : Object.fromEntries(Object.entries(audits).map(([mode, rows]) => [mode, Array.isArray(rows) ? rows.length : 0]));
+  return {
+    ...run,
+    auditCounts,
+    audit: Object.fromEntries(Object.entries(audits).map(([mode, rows]) => [
+      mode,
+      Array.isArray(rows) ? rows.slice(-BOT_RUN_PERSIST_AUDIT_LIMIT) : [],
+    ])),
+  };
+}
+
 function botPersistRuns() {
-  localStorage.setItem(BOT_RUNS_KEY, JSON.stringify(botRuns.slice(0, BOT_RUN_HISTORY_LIMIT)));
+  const compactRuns = botRuns.slice(0, BOT_RUN_HISTORY_LIMIT).map(compactBotRun);
+  localStorage.setItem(BOT_RUNS_KEY, JSON.stringify(compactRuns));
 }
 
 function botPersistRunFile(run) {
-  const payload = JSON.parse(JSON.stringify(run));
+  const payload = compactBotRun(run);
   postToApi("/api/bot-runs", payload).catch(() => {});
 }
 
 function botSnapshotForAudit(mode, ranked = null) {
   const snap = botPortfolioSnapshot(mode, ranked);
+  const openPositions = Object.values(botState.modes[mode].positions || {})
+    .filter(position => Number(position.qty || 0) > 0).length;
   return {
 cash: Number(snap.cash || 0),
 deployed: Number(snap.openValue || 0),
 totalValue: Number(snap.totalValue || 0),
-pnl: Number(snap.pnl || 0),
-capital: Number(snap.capital || 0),
-};
+    pnl: Number(snap.pnl || 0),
+    capital: Number(snap.capital || 0),
+    openPositions,
+    flat: openPositions === 0,
+  };
 }
 
 function generateBotRunId() {
@@ -666,6 +861,8 @@ endedAt: null,
 reason: null,
 durationMin: botConfig.durationMin,
 universeMode: botConfig.universeMode,
+feesEnabled: botConfig.feesEnabled === true,
+multiplierEnabled: botConfig.multiplierEnabled === true,
 symbols,
 modes: Object.fromEntries(botModeIds().map(mode => [mode, {
 capital: botCapital(mode),
@@ -673,6 +870,7 @@ start: botSnapshotForAudit(mode),
 final: null,
 }])),
 audit: Object.fromEntries(botModeIds().map(mode => [mode, []])),
+auditCounts: Object.fromEntries(botModeIds().map(mode => [mode, 0])),
 };
 botRuns.unshift(run);
 botRuns = botRuns.slice(0, BOT_RUN_HISTORY_LIMIT);
@@ -700,6 +898,8 @@ symbol: row.symbol || null,
     edge: Number(row.edge || 0),
     requiredEdge: Number(row.requiredEdge || 0),
     notional: Number(row.notional || 0),
+    multiplier: row.multiplier === undefined ? botConfig.multiplierEnabled === true : row.multiplier === true,
+    freeHand: row.freeHand === true,
     setupType: row.setupType || "",
     blockedBy: row.blockedBy || "",
     exitCause: row.exitCause || "",
@@ -712,6 +912,8 @@ pnl: snap.pnl,
 reason: row.reason || "",
 });
 activeBotRun.audit[mode] = audit.slice(-BOT_RUN_AUDIT_LIMIT);
+activeBotRun.auditCounts = activeBotRun.auditCounts || {};
+activeBotRun.auditCounts[mode] = Number(activeBotRun.auditCounts[mode] || 0) + 1;
 botPersistRuns();
 
 const now = Date.now();
@@ -755,27 +957,79 @@ realized: state.realized,
     };
   });
   localStorage.setItem(BOT_STATE_KEY, JSON.stringify(clean));
+  if (window.botLearning) {
+    localStorage.setItem("trader-desk-bot-learning-v1", JSON.stringify(window.botLearning.serialize()));
+  }
 }
 
 function resetBotSession() {
   const wasRunning = botState.running;
   if (botState.timer) clearTimeout(botState.timer);
+  const prevModes = botState.modes;
   botState = createBotState();
+  Object.keys(BOT_MODES).forEach(mode => {
+    const prev = prevModes && prevModes[mode];
+    if (prev) {
+      botState.modes[mode].positions = prev.positions || {};
+      botState.modes[mode].realized = Number(prev.realized || 0);
+      botState.modes[mode].trades = Array.isArray(prev.trades) ? prev.trades : [];
+    }
+  });
+  botDropOffUniversePositions();
   botState.running = wasRunning;
   botState.startedAt = Date.now();
   botState.stopAt = Date.now() + Math.max(1, Number(botConfig.durationMin || 30)) * 60000;
   botPersistState();
 }
 
+// Close any carried-over paper positions whose symbol is no longer in the
+// configured universe, at cost, so they don't linger untracked.
+function botDropOffUniversePositions() {
+  const symbols = new Set(botUniverseSymbols());
+  Object.keys(BOT_MODES).forEach(mode => {
+    const positions = botState.modes[mode].positions || {};
+    Object.keys(positions).forEach(symbol => {
+      if (!symbols.has(symbol) && Number(positions[symbol].qty || 0) > 0) {
+        const position = positions[symbol];
+        executeBotSell(mode, { symbol, price: Number(position.avgPrice || 0), score: 0, confidence: 0, risk: 0, shortMomentumPct: 0, noisePct: 0, signalAction: "Exit", signalConfidence: 0, setupType: position.setupType || "" }, Number(position.qty || 0), "symbol left universe — closed at cost");
+      }
+    });
+  });
+}
+
 function resetBots() {
 if (botState.timer) clearTimeout(botState.timer);
 botState = createBotState();
+resetPolymarketSession();
+polymarketState.learning = { trades: 0, wins: 0, losses: 0, pnl: 0, bySide: {}, byEdge: {} };
+localStorage.setItem("trader-desk-polymarket-learning-v1", JSON.stringify(polymarketState.learning));
 activeBotRun = null;
 botRuns = [];
+if (window.botLearning) {
+  window.botLearning.reset();
+  localStorage.setItem("trader-desk-bot-learning-v1", JSON.stringify(window.botLearning.serialize()));
+}
 botPersistState();
 botPersistRuns();
 renderBotStatus();
 renderBotLog();
+}
+
+function clearPolymarketAudit() {
+  if (polymarketSwarmEngine) {
+    polymarketSwarmEngine.modes().forEach(mode => {
+      const swarm = polymarketState.swarms?.[mode];
+      if (!swarm) return;
+      swarm.audit = [];
+      swarm.trades = [];
+    });
+    polymarketSwarmEngine.sync();
+  } else {
+    polymarketState.audit = [];
+    polymarketState.trades = [];
+  }
+  renderPolymarketPanel();
+  appendTerminalLine("[BOT] Polymarket audit cleared", "ok");
 }
 
 function botUniverseSymbols() {
@@ -796,7 +1050,7 @@ function botCapital(mode) {
 }
 
 function botQuoteFor(symbol, ranked = []) {
-  return ranked.find(item => item.symbol === symbol) || quotes.find(item => item.symbol === symbol);
+  return (ranked || []).find(item => item.symbol === symbol) || quotes.find(item => item.symbol === symbol);
 }
 
 function botNow() {
@@ -880,6 +1134,14 @@ function botPortfolioSnapshot(mode, ranked = botState.modes[mode].rankings) {
   const cash = Math.max(0, capital - costBasis + realized);
   const totalValue = cash + openValue;
   return { capital, openValue, costBasis, realized, cash, totalValue, pnl: totalValue - capital };
+}
+
+function botMinimumTradeNotional(snapshot) {
+  const accountValue = Math.max(0, Number(snapshot?.totalValue || snapshot?.capital || 0));
+  // Keep the order meaningful for normal accounts while allowing a $10 paper
+  // account to deploy small fractional orders instead of being hard-blocked
+  // by a fixed exchange-sized minimum.
+  return Math.max(BOT_MIN_TRADE_NOTIONAL, accountValue * 0.01);
 }
 
 function analyzeBotSymbolLegacy(mode, quote) {
@@ -985,11 +1247,11 @@ function logBotDecision(mode, row, options = {}) {
 function executeBotBuy(mode, candidate, notional, reason) {
   const state = botState.modes[mode];
   const snapshot = botPortfolioSnapshot(mode);
-  const minTrade = Math.max(BOT_MIN_TRADE_NOTIONAL, snapshot.capital * 0.02);
+  const minTrade = botMinimumTradeNotional(snapshot);
   const cleanNotional = Math.min(notional, snapshot.cash);
   if (cleanNotional < minTrade || candidate.price <= 0) return false;
   // Apply fee: fee is added to cost basis
-  const fee = cleanNotional * BOT_FEE_RATE;
+  const fee = cleanNotional * botFeeRate();
   const qty = cleanNotional / candidate.price;
   const position = state.positions[candidate.symbol] || { qty: 0, avgPrice: 0, costBasis: 0, realized: 0, openedAt: Date.now() };
   position.qty = Number(position.qty || 0) + qty;
@@ -997,10 +1259,25 @@ function executeBotBuy(mode, candidate, notional, reason) {
   position.avgPrice = position.qty > 0 ? position.costBasis / position.qty : 0;
   position.openedAt = position.openedAt || Date.now();
   position.updatedAt = Date.now();
+  position.lastMarkPrice = Number(candidate.price) || position.lastMarkPrice || position.avgPrice;
+  position.setupType = candidate.setupType || position.setupType || "unknown";
+  const multiplier = candidate.multiplier === true;
+  position.multiplier = multiplier;
+  position.freeHand = candidate.freeHand === true || (multiplier && candidate.takeProfitPct === 0);
+  position.entryMomentumZ = Number(candidate.momZ || 0);
+  position.entryMoveZ = Number(candidate.moveZ || 0);
+  position.entryConfidence = Number(candidate.confidence || candidate.verdict?.confidence || 0);
+  position.entrySignal = candidate.signalAction || "Hold";
+  // Persist risk plan from the candidate so BotBase.evaluateExit can enforce it.
+  if (candidate.stopLossPct !== undefined) position.stopLossPct = Number(candidate.stopLossPct);
+  if (position.freeHand) position.takeProfitPct = 0;
+  else if (candidate.takeProfitPct !== undefined) position.takeProfitPct = Number(candidate.takeProfitPct);
+  if (candidate.trailPct !== undefined) position.trailPct = Number(candidate.trailPct);
+  position.lastStopPrice = Number(candidate.stopPrice) || 0;
   state.positions[candidate.symbol] = position;
   state.lastTradeAt[candidate.symbol] = Date.now();
-  botRecordTrade(mode, { side: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, fee, reason });
-  logBotDecision(mode, { action: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, fee, score: candidate.score, reason });
+  botRecordTrade(mode, { side: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, fee, multiplier, freeHand: position.freeHand, reason });
+  logBotDecision(mode, { action: "BUY", symbol: candidate.symbol, qty, price: candidate.price, notional: cleanNotional, fee, multiplier, freeHand: position.freeHand, score: candidate.score, reason });
   return true;
 }
 
@@ -1013,19 +1290,37 @@ function executeBotSell(mode, candidate, qty, reason) {
   const avgPrice = Number(position.avgPrice || candidate.price);
   const notional = sellQty * candidate.price;
   // Apply exit fee
-  const fee = notional * BOT_FEE_RATE;
+  const fee = notional * botFeeRate();
   const costRemoved = sellQty * avgPrice;
   const realized = notional - costRemoved - fee; // Fee subtracted from realized P&L
   position.qty = Math.max(0, Number(position.qty || 0) - sellQty);
   position.costBasis = Math.max(0, Number(position.costBasis || 0) - costRemoved);
   position.realized = Number(position.realized || 0) + realized;
+  position.closedPnl = Number(position.closedPnl || 0) + realized;
+  if (candidate.action === "LOCK PROFIT" || candidate.action === "REDUCE") position.targetHit = true;
   position.updatedAt = Date.now();
   state.realized = Number(state.realized || 0) + realized;
-  if (position.qty <= 0.000001) delete state.positions[candidate.symbol];
+  if (position.qty <= 0.000001) {
+    const outcome = {
+      symbol: candidate.symbol,
+      setupType: candidate.setupType || position.setupType || "unknown",
+      pnl: position.closedPnl || realized,
+      pnlPct: Number(candidate.pnlPct) || 0,
+      volatility: Number(candidate.volatilityPct || 0),
+      capital: botCapital(mode),
+      entryMomentumZ: Number(position.entryMomentumZ || 0),
+      entryMoveZ: Number(position.entryMoveZ || 0),
+      entryConfidence: Number(position.entryConfidence || 0),
+      entrySignal: position.entrySignal || "Hold",
+      freeHand: position.freeHand === true,
+    };
+    if (window.botLearning && window.botLearning.recordExit) window.botLearning.recordExit(mode, outcome);
+    delete state.positions[candidate.symbol];
+  }
   else state.positions[candidate.symbol] = position;
   state.lastTradeAt[candidate.symbol] = Date.now();
-  botRecordTrade(mode, { side: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, fee, pnl: realized, reason });
-  logBotDecision(mode, { action: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, fee, pnl: realized, score: candidate.score, reason });
+  botRecordTrade(mode, { side: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, fee, pnl: realized, multiplier: position.multiplier === true, freeHand: position.freeHand === true, reason });
+  logBotDecision(mode, { action: "SELL", symbol: candidate.symbol, qty: sellQty, price: candidate.price, notional, fee, pnl: realized, multiplier: position.multiplier === true, freeHand: position.freeHand === true, score: candidate.score, reason });
   return true;
 }
 
@@ -1058,6 +1353,132 @@ function renderBotPositions(mode) {
   `).join("");
 }
 
+function renderBotSwarm() {
+  botModeIds().forEach(mode => {
+    const el = botModeEl(mode, "swarm");
+    if (!el) return;
+    const bot = window.tradingBots && window.tradingBots[mode];
+    const worker = bot && bot.worker;
+    const state = botState.modes[mode];
+    const rankings = (state.rankings || []).slice(0, 16);
+    const heldEntries = Object.entries(state.positions || {})
+      .filter(([, position]) => Number(position.qty || 0) > 0);
+    const heldSymbols = new Set(heldEntries.map(([symbol]) => symbol));
+    const swarms = (worker && worker.swarms) || {};
+
+    const arrowFor = direction => direction === "bullish" ? "▲" : direction === "bearish" ? "▼" : "•";
+    const ageFor = ms => {
+      const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+      return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+    };
+
+    const pinnedRows = heldEntries.map(([symbol, position]) => {
+      const item = rankings.find(row => row.symbol === symbol);
+      const agent = swarms[symbol];
+      const watcher = position.lastSwarm || {};
+      const verdict = item?.verdict || watcher.direction
+        ? (item?.verdict || watcher)
+        : (agent?.verdict || { direction: "neutral", confidence: 0 });
+      const quote = botQuoteFor(symbol);
+      const price = Number(item?.price || quote?.price || position.lastMarkPrice || position.avgPrice || 0);
+      const entry = Number(position.avgPrice || 0);
+      const qty = Number(position.qty || 0);
+      const value = qty * price;
+      const pnl = entry ? (price - entry) * qty : 0;
+      const pnlPct = entry ? ((price - entry) / entry) * 100 : 0;
+      const stale = Boolean(item?.feedStale || watcher.feedStale || (agent && agent.staleTickCount() > Number(window.BOT_STALE_TICK_LIMIT || 20)));
+      const reasoning = item?.reasoning || {
+        chain: watcher.summary ? [watcher.summary] : [],
+        reverseCheck: watcher.reverseCheck || "",
+      };
+      const chain = reasoning.chain || [];
+      const reverse = reasoning.reverseCheck || "";
+      return `<div class="swarm-card swarm-position-card ${stale ? "stale" : pnl >= 0 ? "bullish" : "bearish"}" data-symbol="${symbol}" data-position-watch="true">
+        <div class="swarm-card-head">
+          <strong class="swarm-symbol">${symbol}</strong>
+          <span class="swarm-position-tag">${stale ? "STALE · PROTECTING" : "WATCHING"}</span>
+          <span class="swarm-verdict ${verdict.direction || "neutral"}">${arrowFor(verdict.direction)} ${verdict.direction || "neutral"}</span>
+          <em>${Number(verdict.confidence || 0)}%</em>
+        </div>
+        <div class="swarm-card-sub swarm-position-sub">
+          <span>${price > 0 ? "$" + formatPrice(price) : "--"}</span>
+          <span class="${pnl >= 0 ? "pos" : "neg"}">${pnl >= 0 ? "+" : ""}$${formatPrice(pnl)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%)</span>
+          <span>entry $${formatPrice(entry)}</span>
+          <span>age ${ageFor(Date.now() - Number(position.openedAt || Date.now()))}</span>
+        </div>
+        <div class="swarm-card-sub swarm-position-plan">
+          <span>${position.setupType || watcher.setupType || "position"}</span>
+          <span>stop -${Number(position.stopLossPct || 0).toFixed(2)}%</span>
+          <span>${position.freeHand ? "free-hand momentum" : `target +${Number(position.takeProfitPct || 0).toFixed(2)}%`}</span>
+          <span>value $${formatPrice(value)}</span>
+          <span>${stale ? `${Number(watcher.staleTickCount || 0)} stale ticks` : `sample ${agent ? agent.sampleCount() : Number(item?.samples || 0)}`}</span>
+        </div>
+        ${chain.length || reverse ? `<div class="swarm-cot position-watch-reasoning">
+          <ol class="cot-chain">${chain.slice(-4).map(c => `<li>${c}</li>`).join("")}</ol>
+          ${reverse ? `<p class="cot-reverse"><b>rCoT</b> · ${reverse}</p>` : ""}
+        </div>` : ""}
+      </div>`;
+    }).join("");
+
+    const pinned = pinnedRows
+      ? `<section class="swarm-pinned"><div class="swarm-pinned-head"><strong>Positions under watch</strong><span>${heldEntries.length} live</span></div><div class="swarm-list">${pinnedRows}</div></section>`
+      : "";
+
+    if (!worker && !rankings.length && !heldEntries.length) { el.innerHTML = ""; return; }
+    if (!rankings.length && !Object.keys(swarms).length) {
+      el.innerHTML = pinned || '<div class="bot-empty">Swarm agents boot as live prices arrive.</div>';
+      return;
+    }
+
+    if (!rankings.length) {
+      const accumulating = Object.entries(swarms).map(([symbol, agent]) => {
+        const v = agent.verdict || { direction: "neutral", confidence: 0 };
+        return `<div class="swarm-card ${v.direction}">
+          <div class="swarm-card-head"><strong class="swarm-symbol">${symbol}</strong><span class="swarm-verdict ${v.direction}">${arrowFor(v.direction)} ${v.direction}</span><em>${v.confidence}%</em><span class="swarm-meta">${agent.sampleCount()}s · accumulating</span></div>
+        </div>`;
+      }).join("");
+      el.innerHTML = `${pinned}<div class="swarm-list">${accumulating}</div>`;
+      return;
+    }
+
+    const rows = rankings.filter(item => !heldSymbols.has(item.symbol)).map((item, index) => {
+      const agent = swarms[item.symbol];
+      const v = (item.verdict && item.verdict.direction) ? item.verdict : (agent ? agent.verdict : { direction: "neutral", confidence: 0 });
+      const samples = agent ? agent.sampleCount() : Number(item.samples || 0);
+      const reasoning = item.reasoning || null;
+      const chain = (reasoning && reasoning.chain) ? reasoning.chain : [];
+      const reverse = (reasoning && reasoning.reverseCheck) ? reasoning.reverseCheck : "";
+      const expandable = chain.length > 0 || reverse;
+      const arrow = arrowFor(v.direction);
+      const score = Math.round(item.rankScore || item.score || 0);
+      const setup = String(item.setupType || "unknown");
+      const price = Number(item.price || 0);
+      const micro = Number(item.shortMomentumPct || 0);
+      return `<div class="swarm-card ${v.direction}" data-symbol="${item.symbol}">
+        <div class="swarm-card-head">
+          <strong class="swarm-symbol">${item.symbol}</strong>
+          <span class="swarm-rank">#${index + 1}</span>
+          <span class="swarm-score" title="rank score">${score}</span>
+          <span class="swarm-verdict ${v.direction}">${arrow} ${v.direction}</span>
+          <em>${v.confidence}%</em>
+        </div>
+        <div class="swarm-card-sub">
+          <span>${price > 0 ? "$" + formatPrice(price) : "--"}</span>
+          <span class="${micro >= 0 ? "pos" : "neg"}">${micro >= 0 ? "+" : ""}${micro.toFixed(2)}%/4t</span>
+          <span>${setup}</span>
+          <span>${samples} samples</span>
+          ${expandable ? `<button type="button" class="swarm-expand" aria-label="Show reasoning">⌄</button>` : ""}
+        </div>
+        ${expandable ? `<div class="swarm-cot hidden">
+          <ol class="cot-chain">${chain.map(c => `<li>${c}</li>`).join("")}</ol>
+          ${reverse ? `<p class="cot-reverse"><b>rCoT</b> · ${reverse}</p>` : ""}
+        </div>` : ""}
+      </div>`;
+    }).join("");
+    el.innerHTML = `${pinned}<div class="swarm-list">${rows || '<div class="bot-empty">No new candidates. Position watcher remains active.</div>'}</div>`;
+  });
+}
+
 function renderBotLog(mode) {
   const modes = mode ? [mode] : botModeIds();
   modes.forEach(currentMode => {
@@ -1078,20 +1499,218 @@ function renderBotLog(mode) {
   });
 }
 
+function botFmtCountdown(ms) {
+  if (ms == null || !Number.isFinite(Number(ms)) || Number(ms) < 0) return "--:--";
+  const total = Math.floor(Number(ms) / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function updateBotClock() {
+  const el = document.querySelector("#bot-clock");
+  if (el) el.textContent = botNow();
+}
+
+function botTimelineSeg() {
+  const setText = (id, txt) => { const el = document.querySelector(id); if (el) el.textContent = txt; };
+  const setPhase = (id, active) => { const seg = document.querySelector(`.bot-phase-seg[data-phase="${id}"]`); if (seg) seg.classList.toggle("active", !!active); };
+  const pill = document.querySelector("#bot-phase-label");
+  const bar = document.querySelector("#bot-phase-progress");
+  const polymarketMode = botConfig.strategyMode === "polymarket";
+  const caption = document.querySelector(".bot-timeline-caption");
+  if (polymarketMode) {
+    if (caption) caption.textContent = "Market session → trade live → settle at Polymarket window end";
+    if (!botState.running || !polymarketState.sessionAligned || !polymarketState.sessionEnd) {
+      setText("#bot-phase-observe", "market");
+      setText("#bot-phase-trade", "waiting");
+      setText("#bot-phase-exit", "settle");
+      setText("#bot-total-countdown", "--:--");
+      setPhase("observe", false); setPhase("trade", false); setPhase("exit", false);
+      if (bar) bar.style.width = "0%";
+      if (pill) { pill.textContent = botState.running ? "Finding market" : "Stopped"; pill.className = "bot-phase-pill " + (botState.running ? "build" : "stopped"); }
+      return;
+    }
+    const t = botRunTiming("polymarket");
+    const settling = t.remainingMs <= 15_000;
+    setText("#bot-phase-observe", "done");
+    setText("#bot-phase-trade", settling ? "closing" : "live");
+    setText("#bot-phase-exit", botFmtCountdown(t.remainingMs));
+    setText("#bot-total-countdown", botFmtCountdown(t.remainingMs));
+    setPhase("observe", false); setPhase("trade", !settling); setPhase("exit", settling);
+    if (bar) bar.style.width = Math.max(0, Math.min(100, t.progress * 100)) + "%";
+    if (pill) { pill.textContent = settling ? "Settling" : "Market live"; pill.className = "bot-phase-pill " + (settling ? "exit" : "trade"); }
+    return;
+  }
+  if (caption) caption.textContent = "Warm-up → trade freely → cash safety check";
+  if (!botState.running) {
+    setText("#bot-phase-observe", botFmtCountdown((Number(botConfig.observeMinutes ?? defaultBotConfig.observeMinutes) || 2) * 60000));
+    setText("#bot-phase-trade", "--:--");
+    setText("#bot-phase-exit", "--:--");
+    setText("#bot-total-countdown", "--:--");
+    setPhase("observe", false); setPhase("trade", false); setPhase("exit", false);
+    if (bar) bar.style.width = "0%";
+    if (pill) { pill.textContent = "Stopped"; pill.className = "bot-phase-pill stopped"; }
+    return;
+  }
+  const t = botRunTiming("normal");
+  const tradeEnd = Math.max(0, t.durationMs - t.exitMs);
+  const tradeDur = Math.max(0, tradeEnd - t.observeMs);
+  const tradeRem = Math.max(0, tradeEnd - t.elapsedMs);
+  setText("#bot-phase-observe", t.elapsedMs >= t.observeMs ? "done" : botFmtCountdown(t.observeMs - t.elapsedMs));
+  // The safety buffer is not a sell-only lock; the trade clock remains live
+  // until the exact deadline while the final close protects any residue.
+  setText("#bot-phase-trade", t.elapsedMs < t.observeMs ? botFmtCountdown(tradeDur) : botFmtCountdown(tradeRem));
+  setText("#bot-phase-exit", botFmtCountdown(t.remainingMs));
+  setText("#bot-total-countdown", botFmtCountdown(t.remainingMs));
+  setPhase("observe", t.phase === "observe");
+  setPhase("trade", t.phase !== "observe");
+  setPhase("exit", t.phase === "exit");
+  if (bar) bar.style.width = Math.max(0, Math.min(100, t.progress * 100)) + "%";
+  if (pill) {
+    const label = t.phase === "observe" ? "Warm-up" : t.phase === "exit" ? "Cash safety" : "Trading";
+    pill.textContent = botState.running ? label : "Stopped";
+    pill.className = "bot-phase-pill " + (botState.running ? t.phase : "stopped");
+  }
+}
+
+function renderBotLearning() {
+  botModeIds().forEach(mode => {
+    const el = botModeEl(mode, "learning");
+    if (!el) return;
+    const bot = window.tradingBots && window.tradingBots[mode];
+    if (!window.botLearning || !bot || typeof window.botLearning.getParams !== "function") {
+      el.innerHTML = '<div class="bot-empty">Learning engine idle.</div>';
+      return;
+    }
+    const L = window.botLearning.getParams(mode, bot.traits());
+    const pct = v => (Number(v) * 100).toFixed(0) + "%";
+    const fmtEdge = (m, e) => `<span class="edge-chip ${e >= 0 ? "pos" : "neg"}">${m} ${e >= 0 ? "+" : ""}${(e * 100).toFixed(0)}</span>`;
+    const setupChips = Object.entries(L.setupEdge || {}).map(([s, e]) => fmtEdge(s, e)).join("");
+    const symChips = Object.entries(L.symbolEdge || {}).map(([s, e]) => fmtEdge(s, e)).join("");
+    const expect = Number(L.expectancyPct || 0);
+    const realized = Number(L.pnl || 0);
+    const momentumEdges = Object.entries(L.momentumEdge || {})
+      .map(([bucket, stats]) => `${bucket} ${(Number(stats.edge || 0) >= 0 ? "+" : "")}${(Number(stats.edge || 0) * 100).toFixed(0)}`)
+      .join(" · ");
+    const multiplierLearning = botConfig.multiplierEnabled === true;
+    el.innerHTML = `
+      <div class="learning-stats">
+        <div><span>Trades</span><strong>${L.trades}</strong></div>
+        <div><span>Win rate</span><strong>${pct(L.winRate)}</strong></div>
+        <div><span>Payoff</span><strong>${Number(L.payoff || 1).toFixed(2)}</strong></div>
+        <div><span>Kelly</span><strong>${pct(L.kelly)}</strong></div>
+        <div><span>Expectancy</span><strong class="${expect >= 0 ? "positive" : "negative"}">${expect >= 0 ? "+" : ""}${expect.toFixed(3)}%</strong></div>
+        <div><span>Realized</span><strong class="${realized >= 0 ? "positive" : "negative"}">${realized >= 0 ? "+" : ""}$${formatPrice(realized)}</strong></div>
+      </div>
+      <div class="learning-plan">
+        <div><span>Min edge</span><strong>${Number(L.minEdge).toFixed(1)}</strong></div>
+        <div><span>Stop</span><strong>${Number(L.stopPct).toFixed(2)}%</strong></div>
+        <div><span>${multiplierLearning ? "Exit" : "Target"}</span><strong>${multiplierLearning ? "Momentum" : `${Number(L.targetPct).toFixed(2)}%`}</strong></div>
+        <div><span>Trail</span><strong>${Number(L.trailPct).toFixed(2)}%</strong></div>
+        <div><span>Risk ×</span><strong>${Number(L.riskMultiplier).toFixed(2)}</strong></div>
+      </div>
+      <div class="learning-edges">
+        <div><h4>Setup edge</h4><p>${setupChips || '<em class="muted">no closed setups yet</em>'}</p></div>
+        <div><h4>Symbol edge</h4><p>${symChips || '<em class="muted">no closed symbols yet</em>'}</p></div>
+        <div><h4>Momentum learning</h4><p>${momentumEdges || '<em class="muted">learning from closed momentum trades</em>'}</p></div>
+      </div>`;
+  });
+}
+
 function renderBotStatus() {
+updateBotClock();
+botTimelineSeg();
+const polymarketMode = botConfig.strategyMode === "polymarket";
+const botModal = document.querySelector("#bot-modal");
+botModal?.classList.toggle("polymarket-layout", polymarketMode);
+const pageEyebrow = document.querySelector("#bot-page-eyebrow");
+const pageTitle = document.querySelector("#bot-page-title");
+const pageSubtitle = document.querySelector("#bot-page-subtitle");
+if (pageEyebrow) pageEyebrow.textContent = polymarketMode ? "Polymarket paper workspace" : "Autonomous paper trader";
+if (pageTitle) pageTitle.textContent = polymarketMode ? "BTC Up / Down · Polymarket" : "Swarm paper trader";
+if (pageSubtitle) pageSubtitle.textContent = polymarketMode
+  ? "Polymarket Chainlink TWAP relay · exact 30s / 60s contract feeds · paper only"
+  : "Momentum-led paper execution · positions stay watched · no live orders";
+["swarm", "polymarket"].forEach(view => {
+  const button = document.querySelector(`#bot-view-${view}`);
+  if (button) {
+    button.classList.toggle("active", (view === "polymarket") === polymarketMode);
+    button.disabled = botState.running;
+  }
+});
+const controlHolder = selector => {
+  const input = document.querySelector(selector);
+  return input?.closest("label") || input?.closest(".bot-duration-card") || input?.parentElement;
+};
+document.querySelector(".bot-timeline")?.classList.toggle("hidden", polymarketMode);
+document.querySelector(".bot-run-bar")?.classList.toggle("hidden", polymarketMode);
+document.querySelector(".bot-overview")?.classList.toggle("hidden", polymarketMode);
+document.querySelector("#bot-polymarket-panel")?.classList.toggle("hidden", !polymarketMode);
+document.querySelector(".bot-modes-grid")?.classList.toggle("hidden", polymarketMode);
+if (polymarketMode) {
+  const polyEngine = polymarketSwarmEngine;
+  if (!botState.running) polymarketState.interval = botConfig.polymarketInterval || "15m";
+  const swarms = polyEngine ? polyEngine.modes().map(mode => polymarketState.swarms?.[mode]).filter(Boolean) : [];
+  const configuredTotal = botModeIds().reduce((sum, mode) => sum + (botModeEnabled(mode) ? Math.max(1, Number(botConfig.polymarketModes?.[mode] || botConfig.polymarketCapital || 100)) : 0), 0);
+  const hasLiveSwarms = swarms.length > 0;
+  const capital = hasLiveSwarms && polyEngine ? polyEngine.totalCapital() : configuredTotal;
+  const cash = hasLiveSwarms && polyEngine ? polyEngine.totalCash() : configuredTotal;
+  const openValue = swarms.reduce((sum, swarm) => sum + (swarm.position ? swarm.position.qty * Number(swarm.position.lastMark || swarm.position.entryPrice || 0) : 0), 0);
+  const totalValue = cash + openValue;
+  const totalPnl = totalValue - capital;
+  const openPositions = swarms.filter(swarm => swarm.position).length;
+  const decisions = swarms.reduce((sum, swarm) => sum + Number(swarm.decisions || 0), 0);
+  const sessionEnd = polymarketState.sessionEnd ? new Date(polymarketState.sessionEnd).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }) : null;
+  const setPoly = (id, txt, cls) => { const el = document.querySelector(id); if (el) { el.textContent = txt; el.className = cls || ""; } };
+  setPoly("#bot-overview-value", `$${formatPrice(totalValue)}`);
+  setPoly("#bot-overview-pnl", `${totalPnl >= 0 ? "+" : ""}$${formatPrice(totalPnl)}`, totalPnl >= 0 ? "positive" : "negative");
+  setPoly("#bot-overview-capital", `$${formatPrice(capital)}`);
+  setPoly("#bot-overview-open", String(openPositions));
+  setPoly("#bot-overview-decisions", String(decisions));
+  setPoly("#bot-overview-fees", "CLOB book", "positive");
+  setPoly("#bot-overview-multiplier", "Paper", "positive");
+  if (els.botState) { els.botState.textContent = botState.running ? "Running" : "Stopped"; els.botState.className = botState.running ? "running" : ""; }
+  if (els.botSummary) els.botSummary.textContent = `Polymarket BTC · ${polymarketState.interval} · paper only · ${sessionEnd ? `session ends ${sessionEnd}` : "waiting for active market"}`;
+  if (els.botStart) { els.botStart.classList.toggle("hidden", botState.running); els.botStart.disabled = botState.running; }
+  if (els.botStop) { els.botStop.classList.toggle("hidden", !botState.running); els.botStop.disabled = !botState.running; }
+  document.querySelector("#bot-duration")?.toggleAttribute("disabled", true);
+  document.querySelector("#bot-observe")?.toggleAttribute("disabled", true);
+  document.querySelector("#bot-strategy-mode")?.toggleAttribute("disabled", botState.running);
+  document.querySelector("#polymarket-interval")?.toggleAttribute("disabled", botState.running);
+  botModeIds().forEach(mode => {
+    document.querySelector(`#polymarket-capital-${mode}`)?.toggleAttribute("disabled", botState.running);
+    document.querySelector(`#polymarket-enabled-${mode}`)?.toggleAttribute("disabled", botState.running);
+  });
+  renderPolymarketPanel();
+  if (!botState.running) refreshPolymarketPreview();
+  els.btnBot?.classList.toggle("active", botState.running);
+  return;
+}
+controlHolder("#bot-duration")?.classList.toggle("hidden", false);
+controlHolder("#bot-observe")?.classList.toggle("hidden", false);
+document.querySelector(".bot-sizing-note")?.classList.toggle("hidden", false);
 const snapshots = Object.fromEntries(botModeIds().map(mode => [mode, botPortfolioSnapshot(mode)]));
 const totalCapital = Object.values(snapshots).reduce((sum, snap) => sum + snap.capital, 0);
 const totalValue = Object.values(snapshots).reduce((sum, snap) => sum + snap.totalValue, 0);
-  const totalPnl = totalValue - totalCapital;
+const totalPnl = totalValue - totalCapital;
+const totalOpen = botModeIds().reduce((sum, mode) => sum + Object.keys(botState.modes[mode].positions).filter(s => Number(botState.modes[mode].positions[s].qty || 0) > 0).length, 0);
+const totalDecisions = botModeIds().reduce((sum, mode) => sum + Number(botState.modes[mode].decisions || 0), 0);
+const setOv = (id, txt, cls) => { const el = document.querySelector(id); if (!el) return; el.textContent = txt; el.className = cls || ""; };
+setOv("#bot-overview-value", `$${formatPrice(totalValue)}`);
+setOv("#bot-overview-pnl", `${totalPnl >= 0 ? "+" : ""}$${formatPrice(totalPnl)}`, totalPnl >= 0 ? "positive" : "negative");
+setOv("#bot-overview-capital", `$${formatPrice(totalCapital)}`);
+setOv("#bot-overview-open", String(totalOpen));
+setOv("#bot-overview-decisions", String(totalDecisions));
+setOv("#bot-overview-fees", botConfig.feesEnabled ? "On" : "Off", botConfig.feesEnabled ? "positive" : "");
+  setOv("#bot-overview-multiplier", botConfig.multiplierEnabled ? "Free-hand" : "Off", botConfig.multiplierEnabled ? "positive" : "");
   if (els.botState) {
     els.botState.textContent = botState.running ? "Running" : "Stopped";
     els.botState.className = botState.running ? "running" : "";
   }
   if (els.botSummary) {
-    const secondsLeft = botState.running ? Math.max(0, Math.round((botState.stopAt - Date.now()) / 1000)) : 0;
-    els.botSummary.textContent = botState.running
-      ? `$${formatPrice(totalValue)} live value | ${totalPnl >= 0 ? "+" : ""}$${formatPrice(totalPnl)} combined P&L | ${secondsLeft}s left`
-      : `$${formatPrice(totalValue)} combined value | ${totalPnl >= 0 ? "+" : ""}$${formatPrice(totalPnl)} paper P&L`;
+    const symbolsCount = botUniverseSymbols().length;
+    els.botSummary.textContent = `${enabledBotModeIds().length}/3 bots enabled · ${botUniverseLabel()} · ${symbolsCount} symbols · fees ${botConfig.feesEnabled ? "on" : "off"} · free-hand momentum ${botConfig.multiplierEnabled ? "on" : "off"} · window ${Math.round(Number(botConfig.durationMin || 30))}m`;
   }
   if (els.botStart) {
     els.botStart.classList.toggle("hidden", botState.running);
@@ -1103,16 +1722,25 @@ const totalValue = Object.values(snapshots).reduce((sum, snap) => sum + snap.tot
   }
   els.btnBot?.classList.toggle("active", botState.running);
   document.querySelector("#bot-duration")?.toggleAttribute("disabled", botState.running);
+  document.querySelector("#bot-observe")?.toggleAttribute("disabled", botState.running);
+  document.querySelector("#bot-fees-enabled")?.toggleAttribute("disabled", botState.running);
+  document.querySelector("#bot-multiplier-enabled")?.toggleAttribute("disabled", botState.running);
+  document.querySelector("#bot-strategy-mode")?.toggleAttribute("disabled", botState.running);
+  document.querySelector("#polymarket-interval")?.toggleAttribute("disabled", botState.running);
   els.botUniverseMode?.toggleAttribute("disabled", botState.running);
   botModeIds().forEach(mode => {
+    const enabled = botModeEnabled(mode);
+    document.querySelector(`[data-bot-mode="${mode}"]`)?.classList.toggle("bot-disabled", !enabled);
     const snap = snapshots[mode];
     const stateEl = botModeEl(mode, "state");
     const valueEl = botModeEl(mode, "value");
     const pnlEl = botModeEl(mode, "pnl");
     const cashEl = botModeEl(mode, "cash");
     const deployedEl = botModeEl(mode, "deployed");
+    const phaseEl = botModeEl(mode, "phase");
     botInputFor(mode)?.toggleAttribute("disabled", botState.running);
-    if (stateEl) stateEl.textContent = botState.running ? "Live" : "Idle";
+    document.querySelector(`#bot-enabled-${mode}`)?.toggleAttribute("disabled", botState.running);
+    if (stateEl) stateEl.textContent = enabled ? (botState.running ? "Live" : "Idle") : "Disabled";
     if (valueEl) valueEl.textContent = `$${formatPrice(snap.totalValue)}`;
     if (pnlEl) {
       pnlEl.textContent = `${snap.pnl >= 0 ? "+" : ""}$${formatPrice(snap.pnl)}`;
@@ -1120,8 +1748,25 @@ const totalValue = Object.values(snapshots).reduce((sum, snap) => sum + snap.tot
     }
     if (cashEl) cashEl.textContent = `$${formatPrice(snap.cash)}`;
     if (deployedEl) deployedEl.textContent = `$${formatPrice(snap.openValue)}`;
+    if (phaseEl) {
+      if (!enabled) {
+        phaseEl.textContent = "disabled";
+        phaseEl.className = "idle";
+      } else if (!botState.running) {
+        phaseEl.textContent = "idle";
+        phaseEl.className = "idle";
+      } else {
+        const t = botRunTiming(mode);
+        const label = t.phase === "observe" ? "warm-up" : "trade";
+        const rem = t.phase === "observe" ? botFmtCountdown(t.observeMs - t.elapsedMs) : botFmtCountdown(t.remainingMs);
+        phaseEl.textContent = `${label} ${rem}`;
+        phaseEl.className = t.phase === "observe" ? "observe" : "trade";
+      }
+    }
 renderBotPositions(mode);
 });
+renderBotSwarm();
+renderBotLearning();
 }
 
 function botCloseOpenPositions(reason) {
@@ -1131,8 +1776,9 @@ const position = botState.modes[mode].positions[symbol];
 const qty = Number(position?.qty || 0);
 if (qty <= 0) return;
 const quote = botQuoteFor(symbol);
-const price = Number(quote?.price || position.avgPrice || 0);
+const price = Number(quote?.price || position.lastMarkPrice || position.avgPrice || 0);
 if (price <= 0) return;
+const entry = Number(position.avgPrice || price);
 const candidate = {
 symbol,
 price,
@@ -1143,15 +1789,28 @@ shortMomentumPct: 0,
 noisePct: 0,
 signalAction: "Exit",
 signalConfidence: 0,
+setupType: position.setupType || "unknown",
+action: "EXIT",
+pnlPct: entry ? ((price - entry) / entry) * 100 : 0,
+volatilityPct: 0,
 };
 if (executeBotSell(mode, candidate, qty, reason)) {
-botAppendRunAudit(mode, { action: "SELL", symbol, price, reason }, null);
+botAppendRunAudit(mode, { action: "SELL", symbol, price, reason, setupType: candidate.setupType, pnl: candidate.pnlPct }, null);
 }
 });
 });
 }
 
 function stopBot(reason = "stopped") {
+  if (botConfig.strategyMode === "polymarket" || polymarketState.running) {
+    if (botState.timer) clearTimeout(botState.timer);
+    botState.timer = null;
+    if (botState.running || polymarketState.running) stopPolymarketMode(reason);
+    botState.running = false;
+    botPersistState();
+    renderBotStatus();
+    return;
+  }
   if (botState.timer) clearTimeout(botState.timer);
   botState.timer = null;
   if (window.botL2Timer) clearTimeout(window.botL2Timer);
@@ -1160,7 +1819,10 @@ function stopBot(reason = "stopped") {
     if (window.tradingBots) {
         Object.values(window.tradingBots).forEach(bot => bot.stop());
     }
-    botCloseOpenPositions(reason === "run duration completed" ? "window complete; flattened open paper positions" : reason);
+    // Every run ends flat. Positions are managed continuously above; this is
+    // only the last-resort cash safety net for anything still open at the
+    // exact deadline, so capital cannot remain locked in a stopped bot.
+    botCloseOpenPositions(reason === "run duration completed" ? "run safety close" : reason);
     botModeIds().forEach(mode => logBotDecision(mode, { action: "STOP", reason }, { key: `stop:${reason}`, throttleMs: 500 }));
     botFinishRunRecord(reason);
   }
@@ -1177,7 +1839,7 @@ function scheduleBotDecision() {
     return;
   }
   renderBotStatus();
-  botState.timer = setTimeout(scheduleBotDecision, 1000);
+  botState.timer = setTimeout(botConfig.strategyMode === "polymarket" ? runPolymarketTick : enhancedRunBotDecision, BOT_TICK_MS);
 }
 
 
@@ -1193,14 +1855,19 @@ if (botState.running) return;
 readBotConfig();
 resetBotSession();
 botState.running = true;
+if (botConfig.strategyMode === "polymarket") {
+  startPolymarketMode();
+  renderBotStatus();
+  return;
+}
 botStartRunRecord();
-botModeIds().forEach(mode => {
-logBotDecision(mode, { action: "START", reason: `$${formatPrice(botCapital(mode))} capital; ${botConfig.durationMin} minute run; scanning ${botUniverseSymbols().length} ${botUniverseLabel()} symbols` });
+enabledBotModeIds().forEach(mode => {
+  logBotDecision(mode, { action: "START", reason: `$${formatPrice(botCapital(mode))} capital; ${botConfig.durationMin} minute run; scanning ${botUniverseSymbols().length} ${botUniverseLabel()} symbols; free-hand momentum ${botConfig.multiplierEnabled ? "ON" : "off"}` });
 });
   renderBotStatus();
-  scheduleBotDecision();
+  enhancedRunBotDecision();
 
-    botModeIds().forEach(mode => {
+    enabledBotModeIds().forEach(mode => {
         if (window.tradingBots && window.tradingBots[mode]) {
             window.tradingBots[mode].start();
         }
@@ -1236,7 +1903,7 @@ function runBotModeDecisionLegacy(mode, ranked) {
   }
 
   const snapshot = botPortfolioSnapshot(mode, ranked);
-  const minTrade = Math.min(BOT_MIN_TRADE_NOTIONAL, Math.max(0.25, snapshot.capital * 0.01));
+  const minTrade = botMinimumTradeNotional(snapshot);
   if (snapshot.cash < minTrade) {
     logBotDecision(mode, { action: "HOLD", reason: `cash fully deployed; managing exits on $${formatPrice(snapshot.openValue)} open value` }, { key: "fully-deployed", throttleMs: BOT_FULLY_DEPLOYED_LOG_MS });
     return;
@@ -1379,6 +2046,8 @@ function analyzeBotSymbol(mode, quote) {
   context.riskLoad = clamp((context.volatilityPct * 9) + (context.dayRangePct * 1.6) + Math.max(0, -context.shortMomentumPct) * 9, 0, 100);
   context.opportunity = clamp(50 + context.trendQuality - (context.riskLoad * 0.35), 0, 100);
   context.score = Math.round(context.opportunity);
+  context.setupType = window.botClassifySetup(context);
+  context.regime = window.botRegimeLabel(context);
 context.rankScore = context.opportunity + Math.max(0, context.shortMomentumPct) * 4 + Math.max(0, context.resistanceDistancePct) * 0.6;
 return context;
 }
@@ -1564,9 +2233,12 @@ const durationMs = Math.max(1000, stopAt - startedAt);
 const elapsedMs = clamp(now - startedAt, 0, durationMs);
 const remainingMs = clamp(stopAt - now, 0, durationMs);
 const progress = durationMs ? elapsedMs / durationMs : 0;
-const modeSpeed = mode === "calm" ? 1.15 : mode === "aggressive" ? 0.34 : 0.72;
-const observeMs = clamp(durationMs * (0.045 * modeSpeed), mode === "aggressive" ? 1500 : mode === "calm" ? 3500 : 2500, mode === "calm" ? 12000 : mode === "aggressive" ? 4500 : 8000);
-const exitMs = clamp(durationMs * (mode === "calm" ? 0.12 : mode === "aggressive" ? 0.08 : 0.1), mode === "aggressive" ? 6000 : 8000, 30000);
+// Watch phase: user-configurable minutes, capped at 50% of the run so short demo runs still trade.
+const configuredObserveMs = Number(botConfig.observeMinutes ?? defaultBotConfig.observeMinutes) * 60000;
+const observeMs = clamp(configuredObserveMs, mode === "aggressive" ? 1500 : mode === "calm" ? 3500 : 2500, Math.max(30000, durationMs * 0.5));
+// Start releasing risk well before the deadline. The final stop is only a
+// backstop; positions should normally be closed during this earlier window.
+const exitMs = clamp(durationMs * 0.15, Math.min(60_000, durationMs * 0.25), Math.min(180_000, durationMs * 0.3));
 let phase = "build";
 if (elapsedMs < observeMs) phase = "observe";
 else if (remainingMs <= exitMs) phase = "exit";
@@ -1576,13 +2248,420 @@ const activeProgress = clamp((elapsedMs - observeMs) / activeWindow, 0, 1);
 return { now, startedAt, stopAt, durationMs, elapsedMs, remainingMs, progress, activeProgress, observeMs, exitMs, phase };
 }
 
-const tradingBots = {
+function polymarketEdgeBucket(edge) {
+  const value = Math.abs(Number(edge || 0));
+  if (value >= 0.12) return "large";
+  if (value >= 0.07) return "medium";
+  return "small";
+}
+
+function polymarketRecordAudit(action, reason, market = null, extra = {}) {
+  polymarketState.audit.push({
+    ts: new Date().toISOString(),
+    elapsedSec: botState.startedAt ? Math.round((Date.now() - botState.startedAt) / 1000) : 0,
+    action,
+    interval: polymarketState.interval,
+    slug: market?.slug || null,
+    reason,
+    ...extra,
+  });
+  polymarketState.audit = polymarketState.audit.slice(-1200);
+}
+
+function polymarketLearningEdge(edge) {
+  const bucket = polymarketEdgeBucket(edge);
+  const stats = polymarketState.learning.byEdge?.[bucket];
+  if (!stats || stats.n < 3) return 0;
+  return clamp((stats.wins / stats.n - 0.5) * 2, -0.8, 0.8);
+}
+
+function polymarketRecordLearning(position, pnl) {
+  const learning = polymarketState.learning;
+  const side = position.side;
+  const edgeBucket = polymarketEdgeBucket(position.edge);
+  const update = (store, key) => {
+    const stats = store[key] || { n: 0, wins: 0, pnl: 0 };
+    stats.n += 1;
+    stats.wins += pnl > 0 ? 1 : 0;
+    stats.pnl += pnl;
+    store[key] = stats;
+  };
+  learning.trades += 1;
+  learning.wins += pnl > 0 ? 1 : 0;
+  learning.losses += pnl > 0 ? 0 : 1;
+  learning.pnl += pnl;
+  update(learning.bySide, side);
+  update(learning.byEdge, edgeBucket);
+  localStorage.setItem("trader-desk-polymarket-learning-v1", JSON.stringify(learning));
+}
+
+function polymarketClosePosition(reason, exitPrice, market = null, action = "SELL") {
+  const position = polymarketState.position;
+  if (!position) return false;
+  const price = exitPrice === null || exitPrice === undefined
+    ? Number(position.lastMark || position.entryPrice || 0)
+    : Number(exitPrice);
+  if (!(price >= 0 && price <= 1)) return false;
+  const proceeds = position.qty * price;
+  const pnl = proceeds - position.cost;
+  polymarketState.cash += proceeds;
+  polymarketState.realized += pnl;
+  polymarketRecordLearning(position, pnl);
+  polymarketState.trades.unshift({
+    time: botNow(), action, side: position.side, slug: position.slug,
+    qty: position.qty, price, notional: proceeds, pnl, reason,
+  });
+  polymarketState.trades = polymarketState.trades.slice(0, 200);
+  polymarketRecordAudit(action, reason, market, { side: position.side, price, pnl });
+  polymarketState.position = null;
+  polymarketState.lastExitAt = Date.now();
+  polymarketState.lastDecision = reason;
+  return true;
+}
+
+function polymarketSettlePosition(reason, won, market = null) {
+  return polymarketClosePosition(reason, won ? 1 : 0, market, "SETTLE");
+}
+
+function polymarketNormalCdf(value) {
+  return clamp(0.5 + 0.5 * Math.tanh(Number(value || 0) * 0.79788456), 0.001, 0.999);
+}
+
+function polymarketConfirmModel(model) {
+  if (!model.ready) {
+    polymarketState.modelSide = null;
+    polymarketState.modelSideCount = 0;
+    return model;
+  }
+  if (polymarketState.modelSide === model.side) polymarketState.modelSideCount += 1;
+  else {
+    polymarketState.modelSide = model.side;
+    polymarketState.modelSideCount = 1;
+  }
+  return { ...model, confirmed: polymarketState.modelSideCount >= 3 };
+}
+
+function polymarketModel(market) {
+  const history = polymarketState.history;
+  const price = Number(polymarketState.latest?.spot?.price || 0);
+  const referencePrice = Number(market.reference?.price || 0);
+  const remainingSeconds = Math.max(1, Number(market.secondsRemaining || 0));
+  const spotAgeMs = Number(polymarketState.latest?.spot?.ageMs);
+  if (!(price > 0) || !(referencePrice > 0)) return { ready: false, reason: "Waiting for the Chainlink price-to-beat anchor" };
+  if (market.anchorReady !== true) return { ready: false, reason: "Waiting for an exact Chainlink window-start anchor" };
+  if (Number.isFinite(spotAgeMs) && spotAgeMs > 5_000) return { ready: false, reason: `Chainlink feed stale (${Math.ceil(spotAgeMs / 1000)}s)` };
+  if (history.length < 8) return { ready: false, reason: `Collecting Chainlink momentum (${history.length}/8 samples)` };
+
+  const points = history.slice(-90).filter(row => Number(row.price) > 0 && Number(row.time) > 0);
+  const returns = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const dt = clamp((Number(current.time) - Number(previous.time)) / 1000, 0.25, 10);
+    const logReturn = Math.log(Number(current.price) / Number(previous.price));
+    if (Number.isFinite(logReturn)) returns.push({ logReturn, dt });
+  }
+  if (returns.length < 4) return { ready: false, reason: "Waiting for enough live Chainlink movement" };
+  const totalSeconds = returns.reduce((sum, row) => sum + row.dt, 0);
+  const driftPerSecond = returns.reduce((sum, row) => sum + row.logReturn, 0) / Math.max(1, totalSeconds);
+  const variancePerSecond = returns.reduce((sum, row) => sum + (row.logReturn ** 2), 0) / Math.max(1, totalSeconds);
+  // A quiet few seconds must not collapse the binary-event volatility to
+  // almost zero. That was producing absurd 90%+ probabilities from a tiny
+  // move around the price-to-beat and caused rapid direction flips.
+  const horizonVolFloor = 0.00055 * Math.sqrt(Math.max(60, remainingSeconds) / 300);
+  const sigmaRemaining = Math.max(horizonVolFloor, Math.sqrt(variancePerSecond) * Math.sqrt(remainingSeconds));
+  const moveFromReference = Math.log(price / referencePrice);
+  // Short-horizon drift is useful as a small confirmation, not as a forecast
+  // of the entire remaining event. The old multiplier overfit a few recent
+  // ticks and turned a 0.03% move into an implausible 88-91% prediction.
+  const driftAdjustment = clamp(driftPerSecond * remainingSeconds * 0.08, -sigmaRemaining * 0.2, sigmaRemaining * 0.2);
+  const rawModelUp = polymarketNormalCdf((moveFromReference + driftAdjustment) / sigmaRemaining);
+  const marketPrior = Number(market.yes?.mid);
+  if (!(marketPrior > 0 && marketPrior < 1)) return { ready: false, reason: "Waiting for a live executable market midpoint" };
+  // The CLOB is already an information-rich prior. The Chainlink/PTB model
+  // is a residual signal, not permission to fade an 85% market with a tiny
+  // two-minute move. Keeping the prior dominant prevents underdog churn while
+  // still allowing a genuine model/book disagreement to create edge.
+  const modelUp = clamp(marketPrior * 0.75 + rawModelUp * 0.25, 0.01, 0.99);
+  const shortLookback = points[Math.max(0, points.length - 12)]?.price || price;
+  const shortReturnPct = ((price - shortLookback) / shortLookback) * 100;
+  const referenceMovePct = ((price - referencePrice) / referencePrice) * 100;
+  const momentumZ = (moveFromReference + driftAdjustment) / sigmaRemaining;
+  const yesAsk = Number(market.yes?.buyPrice ?? market.yes?.ask ?? 0);
+  const noAsk = Number(market.no?.buyPrice ?? market.no?.ask ?? 0);
+  const yesSpread = Number(market.yes?.spread || 0);
+  const noSpread = Number(market.no?.spread || 0);
+  const yesEdge = yesAsk > 0 && yesAsk < 1 ? modelUp - yesAsk : -1;
+  const noEdge = noAsk > 0 && noAsk < 1 ? (1 - modelUp) - noAsk : -1;
+  const side = yesEdge >= noEdge ? "YES" : "NO";
+  const edge = Math.max(yesEdge, noEdge);
+  const buyPrice = side === "YES" ? yesAsk : noAsk;
+  const spread = side === "YES" ? yesSpread : noSpread;
+  const learnedEdge = polymarketLearningEdge(edge);
+  const requiredEdge = clamp(Math.max(0.05, spread * 0.75 + 0.012, 0.055 - learnedEdge * 0.01), 0.045, 0.12);
+  const sideProbability = side === "YES" ? modelUp : 1 - modelUp;
+  return {
+    ready: true,
+    side,
+    edge,
+    buyPrice,
+    ask: buyPrice,
+    modelUp,
+    momentumZ,
+    returnPct: shortReturnPct,
+    referenceMovePct,
+    sigmaRemaining,
+    rawModelUp,
+    marketPrior,
+    spread,
+    requiredEdge,
+    confidence: clamp(0.5 + Math.abs(edge) * 3.2 + Math.min(0.15, Math.abs(momentumZ) * 0.03), 0, 0.98),
+    reason: `${side} fair ${(sideProbability * 100).toFixed(1)}% vs buy ${buyPrice.toFixed(3)} · edge ${(edge * 100).toFixed(1)}% · ${referenceMovePct >= 0 ? "+" : ""}${referenceMovePct.toFixed(3)}% vs PTB · ${Math.ceil(remainingSeconds)}s left`,
+  };
+}
+
+function polymarketOpenPosition(model, market, timing) {
+  const eventEntryCutoffSeconds = Math.max(45, Number(timing.exitMs || 0) / 1000);
+  if (!model.ready || model.confirmed !== true || Number(market.secondsRemaining || 0) <= eventEntryCutoffSeconds || Date.now() - Number(polymarketState.lastExitAt || 0) < 15_000 || model.edge < model.requiredEdge || !(model.buyPrice > 0 && model.buyPrice < 1)) return false;
+  const minTokens = Math.max(5, Number(market[model.side === "YES" ? "yes" : "no"]?.minOrderSize || 5));
+  const maxAllocation = clamp(0.25 + Math.max(0, model.edge - model.requiredEdge) * 4.5, 0.25, 0.9);
+  const cost = Math.min(polymarketState.cash, polymarketState.capital * maxAllocation);
+  if (cost < model.buyPrice * minTokens) return false;
+  const qty = cost / model.buyPrice;
+  polymarketState.cash -= cost;
+  polymarketState.position = {
+    side: model.side,
+    slug: market.slug,
+    interval: market.interval,
+    qty,
+    cost,
+    entryPrice: model.buyPrice,
+    lastMark: model.buyPrice,
+    highMark: model.buyPrice,
+    windowEnd: market.windowEnd,
+    referencePrice: market.reference?.price,
+    edge: model.edge,
+    momentumZ: model.momentumZ,
+    openedAt: Date.now(),
+  };
+  polymarketState.trades.unshift({ time: botNow(), action: "BUY", side: model.side, slug: market.slug, qty, price: model.buyPrice, notional: cost, reason: model.reason });
+  polymarketState.trades = polymarketState.trades.slice(0, 200);
+  polymarketRecordAudit("BUY", `Paper ${model.reason}`, market, { side: model.side, price: model.buyPrice, notional: cost, confidence: model.confidence, referencePrice: market.reference?.price });
+  polymarketState.lastDecision = `Bought ${model.side} · ${model.reason}`;
+  return true;
+}
+
+function polymarketManagePosition(model, market, timing) {
+  const position = polymarketState.position;
+  if (!position) return false;
+  const book = market[position.side === "YES" ? "yes" : "no"] || {};
+  const mark = Number(book.sellPrice ?? book.bid ?? book.mid ?? position.lastMark ?? 0);
+  if (mark > 0) position.lastMark = mark;
+  position.highMark = Math.max(Number(position.highMark || position.entryPrice), Number(position.lastMark || 0));
+  const pnlPct = position.entryPrice ? ((position.lastMark - position.entryPrice) / position.entryPrice) * 100 : 0;
+  const marketProb = Number(market.yes?.mid || 0.5);
+  const modelUp = model.ready ? Number(model.modelUp) : marketProb;
+  const thesisFlip = model.confirmed === true && (position.side === "YES"
+    ? modelUp < marketProb - 0.05
+    : modelUp > marketProb + 0.05);
+  const givebackPct = position.highMark ? ((position.highMark - position.lastMark) / position.highMark) * 100 : 0;
+  const profitGiveback = pnlPct >= 8 && givebackPct >= 3;
+  const hardLoss = pnlPct <= -8;
+  // botRunTiming.exitMs is milliseconds; the Polymarket market clock is
+  // seconds. Keep the units explicit so a 180-second runtime buffer cannot
+  // accidentally become a 180,000-second event exit threshold.
+  const runtimeExitSeconds = Number(timing.exitMs || 0) / 1000;
+  const eventSafety = Number(market.secondsRemaining || 0) <= Math.max(45, runtimeExitSeconds);
+  if (thesisFlip || hardLoss || profitGiveback || eventSafety) {
+    const reason = eventSafety
+      ? `Market safety exit · ${Math.ceil(Number(market.secondsRemaining || 0))}s remain`
+      : thesisFlip
+        ? `Probability thesis flipped · ${model.reason}`
+        : profitGiveback
+          ? `Profit protected · ${pnlPct.toFixed(1)}% gain gave back ${givebackPct.toFixed(1)}%`
+          : `Loss cut · ${pnlPct.toFixed(1)}%`;
+    return polymarketClosePosition(reason, position.lastMark, market);
+  }
+  const fairSideProbability = position.side === "YES" ? model.modelUp : 1 - model.modelUp;
+  polymarketState.lastDecision = `Holding ${position.side} · mark ${position.lastMark.toFixed(3)} · P&L ${pnlPct.toFixed(1)}% · ${model.ready ? `fair ${(fairSideProbability * 100).toFixed(1)}%` : "feed updating"}`;
+  return false;
+}
+
+function renderPolymarketPanel() {
+  if (polymarketSwarmEngine) {
+    polymarketSwarmEngine.render();
+    return;
+  }
+  const panel = document.querySelector("#bot-polymarket-panel");
+  if (!panel) return;
+  if (!polymarketState.running) {
+    polymarketState.interval = botConfig.polymarketInterval || "15m";
+    polymarketState.capital = Math.max(1, Number(botConfig.polymarketCapital || 100));
+  }
+  const latest = polymarketState.latest;
+  const market = latest?.markets?.find(row => row.interval === polymarketState.interval);
+  const summary = document.querySelector("#polymarket-summary");
+  const card = document.querySelector("#polymarket-market-card");
+  const trades = document.querySelector("#polymarket-trades");
+  const learning = document.querySelector("#polymarket-learning");
+  const position = polymarketState.position;
+  const value = polymarketState.cash + (position ? position.qty * Number(position.lastMark || position.entryPrice || 0) : 0);
+  if (summary) summary.innerHTML = `<div><span>Paper value</span><strong class="${polymarketState.realized >= 0 ? "positive" : "negative"}">$${formatPrice(value)}</strong></div><div><span>P&L</span><strong class="${polymarketState.realized >= 0 ? "positive" : "negative"}">${polymarketState.realized >= 0 ? "+" : ""}$${formatPrice(polymarketState.realized)}</strong></div><div><span>Chainlink BTC</span><strong>$${formatPrice(latest?.spot?.price)}</strong><small>${latest?.spot?.stale ? "stale" : `${latest?.spot?.ageMs ?? "--"}ms old`}</small></div><div><span>Decision</span><strong>${polymarketState.lastDecision || "Watching"}</strong></div>`;
+  if (card) {
+    if (!market) card.innerHTML = `<div class="polymarket-empty">No active BTC ${polymarketState.interval} market is available right now.</div>`;
+    else card.innerHTML = `<div class="polymarket-market-head"><div><strong>${market.question || `BTC ${market.interval}`}</strong><small>${Math.ceil(Number(market.secondsRemaining || 0))}s remaining · ${market.stale ? "CLOB prices stale" : "live CLOB prices"} · ${market.anchorReady ? `PTB $${formatPrice(market.reference?.price)}` : "PTB anchor pending"}</small></div><span class="polymarket-live-dot"></span></div><div class="polymarket-outcomes"><div class="poly-outcome yes"><span>UP / YES</span><strong>${Number(market.yes?.mid || 0).toFixed(3)}</strong><small>buy ${Number((market.yes?.buyPrice ?? market.yes?.ask) || 0).toFixed(3)} · sell ${Number((market.yes?.sellPrice ?? market.yes?.bid) || 0).toFixed(3)}</small></div><div class="poly-outcome no"><span>DOWN / NO</span><strong>${Number(market.no?.mid || 0).toFixed(3)}</strong><small>buy ${Number((market.no?.buyPrice ?? market.no?.ask) || 0).toFixed(3)} · sell ${Number((market.no?.sellPrice ?? market.no?.bid) || 0).toFixed(3)}</small></div></div><p class="polymarket-thesis">${polymarketState.lastDecision || "The paper model is aligning Chainlink PTB, fair probability, and executable CLOB prices."}</p>`;
+  }
+  if (trades) trades.innerHTML = position ? `<div class="poly-position"><b>${position.side}</b><span>${position.qty.toFixed(2)} tokens @ ${position.entryPrice.toFixed(3)}</span><strong>mark ${Number(position.lastMark || position.entryPrice).toFixed(3)}</strong></div>` : `<em>No open paper position. The mode waits for a real probability edge.</em>`;
+  if (learning) learning.innerHTML = `<div class="poly-learning-stats"><span>${polymarketState.learning.trades} closed</span><span>${polymarketState.learning.trades ? Math.round(polymarketState.learning.wins / polymarketState.learning.trades * 100) : 0}% win</span><span>${polymarketState.learning.pnl >= 0 ? "+" : ""}$${formatPrice(polymarketState.learning.pnl)}</span></div><p>${Object.entries(polymarketState.learning.byEdge || {}).map(([bucket, stats]) => `${bucket}: ${stats.wins}/${stats.n}`).join(" · ") || "Learning starts after the first closed paper trade."}</p>`;
+}
+
+async function runPolymarketTick() {
+  if (polymarketSwarmEngine) {
+    await polymarketSwarmEngine.tick();
+    return;
+  }
+  if (!botState.running || botConfig.strategyMode !== "polymarket" || polymarketState.inFlight) return;
+  if (Date.now() >= botState.stopAt) {
+    stopBot("run duration completed");
+    return;
+  }
+  polymarketState.inFlight = true;
+  try {
+    const data = await fetchFromApi("/api/polymarket/btc");
+    polymarketState.latest = data;
+    const spotPrice = Number(data.spot?.price || 0);
+    if (spotPrice > 0) {
+      const timestamp = Number(data.spot?.timestampMs || Date.now());
+      const previous = polymarketState.history[polymarketState.history.length - 1];
+      if (!previous || timestamp > Number(previous.time)) polymarketState.history.push({ time: timestamp, price: spotPrice });
+      polymarketState.history = polymarketState.history.slice(-180);
+    }
+    const timing = botRunTiming("polymarket");
+    const market = (data.markets || []).find(row => row.interval === polymarketState.interval);
+    const heldMarket = polymarketState.position
+      ? (data.markets || []).find(row => row.slug === polymarketState.position.slug)
+      : null;
+    const positionExpired = polymarketState.position
+      && Number(polymarketState.position.windowEnd || 0) > 0
+      && Date.now() >= Number(polymarketState.position.windowEnd) * 1000;
+    if (positionExpired && spotPrice > 0 && Number(polymarketState.position.referencePrice || 0) > 0) {
+      const position = polymarketState.position;
+      const won = position.side === "YES"
+        ? spotPrice >= Number(position.referencePrice)
+        : spotPrice < Number(position.referencePrice);
+      polymarketSettlePosition(`Market settled ${won ? "WIN" : "LOSS"} · ${position.side} vs Chainlink PTB`, won, heldMarket || market);
+    } else if (polymarketState.position && heldMarket) {
+      const model = polymarketConfirmModel(polymarketModel(heldMarket));
+      polymarketManagePosition(model, heldMarket, timing);
+    } else if (polymarketState.position && !heldMarket) {
+      polymarketState.lastDecision = "Held market temporarily missing; position remains pinned and risk is not guessed";
+      polymarketRecordAudit("WATCH", polymarketState.lastDecision, market);
+    } else if (!market) {
+      polymarketState.lastDecision = `Waiting for active BTC ${polymarketState.interval} market`;
+      polymarketRecordAudit("WATCH", polymarketState.lastDecision);
+    } else if (timing.phase === "observe") {
+      polymarketState.lastDecision = `Warm-up: collecting BTC momentum (${polymarketState.history.length} samples) — no entry`;
+      polymarketRecordAudit("WATCH", polymarketState.lastDecision, market);
+    } else {
+      const model = polymarketConfirmModel(polymarketModel(market));
+      const eventEntryCutoffSeconds = Math.max(45, Number(timing.exitMs || 0) / 1000);
+      if (timing.phase !== "exit" && Number(market.secondsRemaining || 0) > eventEntryCutoffSeconds && !data.spot?.stale && !market.stale && model.ready) {
+        if (!polymarketOpenPosition(model, market, timing)) {
+          polymarketState.lastDecision = model.confirmed !== true
+            ? `Confirming ${model.side} probability signal (${polymarketState.modelSideCount}/3)`
+            : model.edge >= model.requiredEdge
+              ? "Setup passed; waiting for a clean executable price or cooldown"
+              : `Watching · edge ${(model.edge * 100).toFixed(1)}% below ${(model.requiredEdge * 100).toFixed(1)}%`;
+        }
+      } else if (data.spot?.stale || market.stale) {
+        polymarketState.lastDecision = "Stale Chainlink/CLOB prices: monitoring only, no new paper entry";
+      } else if (Number(market.secondsRemaining || 0) <= eventEntryCutoffSeconds) {
+        polymarketState.lastDecision = `Event safety window: no new entry with ${Math.ceil(Number(market.secondsRemaining || 0))}s left`;
+      } else if (!model.ready) {
+        polymarketState.lastDecision = model.reason;
+      }
+    }
+    polymarketState.error = "";
+  } catch (error) {
+    polymarketState.error = error.message || "Polymarket feed unavailable";
+    polymarketState.lastDecision = polymarketState.error;
+  } finally {
+    polymarketState.inFlight = false;
+    renderPolymarketPanel();
+    renderBotStatus();
+    scheduleBotDecision();
+  }
+}
+
+function resetPolymarketSession() {
+  if (polymarketSwarmEngine) {
+    polymarketSwarmEngine.reset();
+    return;
+  }
+  polymarketState.running = false;
+  polymarketState.startedAt = null;
+  polymarketState.stopAt = null;
+  polymarketState.cash = 100;
+  polymarketState.capital = 100;
+  polymarketState.realized = 0;
+  polymarketState.position = null;
+  polymarketState.trades = [];
+  polymarketState.history = [];
+  polymarketState.latest = null;
+  polymarketState.lastDecision = null;
+  polymarketState.error = "";
+  polymarketState.audit = [];
+  polymarketState.modelSide = null;
+  polymarketState.modelSideCount = 0;
+  polymarketState.lastExitAt = 0;
+  renderPolymarketPanel();
+}
+
+function startPolymarketMode() {
+  if (polymarketSwarmEngine) {
+    polymarketSwarmEngine.start(botConfig);
+    appendTerminalLine(`[BOT] Polymarket BTC ${polymarketState.interval} · Calm / Normal / Aggressive swarms started`, "ok");
+    runPolymarketTick();
+    return;
+  }
+  polymarketState.interval = botConfig.polymarketInterval || "15m";
+  polymarketState.capital = Math.max(1, Number(botConfig.polymarketCapital || 100));
+  polymarketState.cash = polymarketState.capital;
+  polymarketState.running = true;
+  polymarketState.startedAt = Date.now();
+  polymarketState.stopAt = botState.stopAt;
+  polymarketState.position = null;
+  polymarketState.trades = [];
+  polymarketState.history = [];
+  polymarketState.lastDecision = "Starting live Polymarket paper watcher";
+  polymarketRecordAudit("START", `BTC ${polymarketState.interval} paper mode · warm-up blocks entries`);
+  appendTerminalLine(`[BOT] Polymarket BTC ${polymarketState.interval} paper mode started`, "ok");
+  renderPolymarketPanel();
+  runPolymarketTick();
+}
+
+function stopPolymarketMode(reason = "stopped") {
+  if (polymarketSwarmEngine) {
+    polymarketSwarmEngine.stop(reason);
+    appendTerminalLine(`[BOT] Polymarket swarms stopped · ${reason}`, "ok");
+    renderPolymarketPanel();
+    return;
+  }
+  if (polymarketState.position) polymarketClosePosition(reason === "run duration completed" ? "run safety close before deadline" : reason, polymarketState.position.lastMark);
+  polymarketState.running = false;
+  polymarketState.stopAt = null;
+  polymarketRecordAudit("STOP", reason);
+  appendTerminalLine(`[BOT] Polymarket paper mode stopped · ${reason}`, "ok");
+  renderPolymarketPanel();
+}
+
+const tradingBots = window.tradingBots || {
   calm: new CalmBot(),
   normal: new NormalBot(),
   aggressive: new AggressiveBot()
 };
 
-function enhancedRunBotDecision() {
+async function enhancedRunBotDecision() {
 if (!botState.running) return;
 if (Date.now() >= botState.stopAt) {
 stopBot("run duration completed");
@@ -1590,7 +2669,7 @@ return;
 }
 const symbols = botUniverseSymbols();
 if (!symbols.length) {
-botModeIds().forEach(mode => {
+enabledBotModeIds().forEach(mode => {
 const row = { action: "HOLD", reason: `${botUniverseLabel()} empty` };
 logBotDecision(mode, row, { key: "empty-universe", throttleMs: 5000 });
 botAppendRunAudit(mode, row, null);
@@ -1604,7 +2683,7 @@ const universe = symbols
 .map(symbol => quotes.find(quote => quote.symbol === symbol))
 .filter(quote => quote && Number(quote.price || 0) > 0);
 if (!universe.length) {
-botModeIds().forEach(mode => {
+enabledBotModeIds().forEach(mode => {
 const row = { action: "HOLD", reason: `waiting for live ${botUniverseLabel()} prices` };
 logBotDecision(mode, row, { key: "no-prices", throttleMs: 5000 });
 botAppendRunAudit(mode, row, null);
@@ -1613,12 +2692,52 @@ renderBotStatus();
 scheduleBotDecision();
 return;
 }
-botModeIds().forEach(mode => {
-const ranked = botRankAnalyses(universe.map(quote => analyzeBotSymbol(mode, quote)));
-if (ranked.length) tradingBots[mode].runModeDecision(ranked);
-});
+  for (const mode of enabledBotModeIds()) {
+  const bot = tradingBots[mode];
+  if (!bot || !bot.worker) continue;
+  const results = await Promise.all(universe.map(quote => bot.worker.evaluate(quote).catch(() => null)));
+  const ranked = botRankAnalyses(results);
+  if (ranked.length) {
+    bot.runModeDecision(ranked);
+  } else {
+    const heldRows = Object.entries(botState.modes[mode].positions || {})
+      .filter(([, position]) => Number(position.qty || 0) > 0)
+      .map(([symbol, position]) => {
+        const watcher = position.lastSwarm || {};
+        const quote = botQuoteFor(symbol);
+        const price = Number(quote?.price || position.lastMarkPrice || position.avgPrice || 0);
+        const entry = Number(position.avgPrice || price);
+        return {
+          symbol,
+          price,
+          heldQty: Number(position.qty || 0),
+          pnlPct: entry ? ((price - entry) / entry) * 100 : 0,
+          openedAt: position.openedAt || 0,
+          drawdownFromHighPct: 0,
+          feedStale: true,
+          staleTickCount: Number(watcher.staleTickCount || 0),
+          momZ: Number(watcher.momentumZ ?? position.entryMomentumZ ?? 0),
+          moveZ: Number(watcher.moveZ ?? position.entryMoveZ ?? 0),
+          shortMomentumPct: Number(watcher.shortMomentumPct || 0),
+          signalAction: watcher.signalAction || position.entrySignal || "Hold",
+          verdict: { direction: watcher.direction || "neutral", confidence: Number(watcher.confidence || 0) },
+          setupType: position.setupType || watcher.setupType || "unknown",
+          liveVolPct: 0,
+          volatilityPct: 0,
+        };
+      });
+    const held = heldRows.length > 0;
+    if (heldRows.length) bot.runModeDecision(heldRows);
+    const reason = held
+      ? "No fresh swarm samples; existing position remains under risk watch"
+      : "No fresh swarm samples; waiting for live price movement";
+    const row = { action: "WATCH", blockedBy: "feed-stale", reason };
+    logBotDecision(mode, row, { key: `feed-stale:${mode}`, throttleMs: 5000 });
+    botAppendRunAudit(mode, row, null);
+  }
+}
 } catch (err) {
-botModeIds().forEach(mode => {
+enabledBotModeIds().forEach(mode => {
 const row = { action: "HOLD", reason: err.message || "bot decision failed" };
 logBotDecision(mode, row, { key: "decision-error", throttleMs: 5000 });
 botAppendRunAudit(mode, row, null);
@@ -1665,12 +2784,15 @@ function addToHistory(symbol) {
 
 function buildApiCandidates() {
   const host = window.location.hostname || "localhost";
-  const candidates = [`http://${host}:8000`, "http://localhost:8000", "http://127.0.0.1:8000"];
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+  const candidates = [];
+  if (window.location.port === "8000") candidates.push("");
+  candidates.push(`${protocol}//${host}:8000`, `${protocol}//localhost:8000`, `${protocol}//127.0.0.1:8000`);
   return [...new Set(candidates)];
 }
 
 function websocketUrl(path) {
-  const url = new URL(apiBase || API_CANDIDATES[0]);
+  const url = new URL(apiBase || API_CANDIDATES.find(Boolean) || window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = path;
   url.search = "";
@@ -1764,6 +2886,21 @@ function setStatus(text, mode = "ok") {
   els.status.className = `api-status ${mode}`;
 }
 
+function enhanceInteractiveRows(root, selector) {
+  if (!root) return;
+  root.querySelectorAll(selector).forEach((row) => {
+    if (row.dataset.keyboardReady === "true") return;
+    row.dataset.keyboardReady = "true";
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      row.click();
+    });
+  });
+}
+
 function renderWatchlist() {
   els.watchlist.classList.remove("loading");
   els.watchlist.innerHTML = quotes
@@ -1790,13 +2927,14 @@ function renderWatchlist() {
       `;
     })
     .join("");
+  enhanceInteractiveRows(els.watchlist, ".watch-row");
 }
 
 const LOT_COLORS = ["#00ffff", "#ff00ff", "#ffff00", "#ffa500", "#0088ff", "#8a2be2", "#ff1493", "#00fa9a", "#ff6347"];
 
 function renderPortfolio() {
   if (savedPortfolio.length === 0) {
-    els.portfolioList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No positions yet. Buy something!</div>`;
+    els.portfolioList.innerHTML = `<div class="empty-state">No positions yet. Buy something!</div>`;
     return;
   }
   
@@ -1813,7 +2951,7 @@ function renderPortfolio() {
     return `
       <div class="portfolio-item ${pos.symbol === activeSymbol ? "active" : ""} ${flash}" onclick="selectSymbol('${pos.symbol}')">
         <div class="port-row main">
-          <strong><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${pos.color};margin-right:6px;"></span>${pos.symbol}</strong>
+          <strong><span class="lot-dot" style="--lot-color:${pos.color}"></span>${pos.symbol}</strong>
           <b>$${formatPrice(currentPrice)}</b>
         </div>
         <div class="port-row meta">
@@ -1826,13 +2964,14 @@ function renderPortfolio() {
       </div>
     `;
   }).join("");
+  enhanceInteractiveRows(els.portfolioList, ".portfolio-item");
 }
 
 function renderHistory() {
   if (!els.historyList) return;
   const filteredHistory = tradeHistory.slice().reverse().slice(0, 50); // limit to last 50 for ui performance
   if (!filteredHistory.length) {
-    els.historyList.innerHTML = `<div style="padding:16px; color:var(--muted); text-align:center;">No recent history.</div>`;
+    els.historyList.innerHTML = `<div class="empty-state">No recent history.</div>`;
     if (lwHistorySeries) lwHistorySeries.setData([]);
     return;
   }
@@ -1862,7 +3001,8 @@ flash = prior !== undefined && p !== prior ? (p > prior ? "flash-up" : "flash-do
         </div>
       </div>
     `;
-  }).join("");
+}).join("");
+enhanceInteractiveRows(els.historyList, ".watch-row");
 }
 
 function executeTrade(symbol, side, qty, price, id = null) {
@@ -1882,23 +3022,30 @@ return false;
     
     savedPortfolio.push({ id: newId, symbol, qty, avgPrice: price, color });
     tradeHistory.push({ type: "BUY", symbol, qty, price, timestamp });
+    if (tradeHistory.length > 500) tradeHistory.splice(0, tradeHistory.length - 500);
 } else if (side === "sell") {
-let pnl = 0;
-const totalHeld = heldQuantity(symbol);
-if (totalHeld <= 0 || qty > totalHeld + 0.000001) {
-alert(`Not enough ${symbol} position to sell.`);
-return false;
-}
-walletCash += tradeValue; // Add full sale amount to cash
+    let pnl = 0;
+    const totalHeld = heldQuantity(symbol);
+    if (totalHeld <= 0 || qty > totalHeld + 0.000001) {
+      alert(`Not enough ${symbol} position to sell.`);
+      return false;
+    }
+    let soldQty = 0;
     if (id) {
       const existingIdx = savedPortfolio.findIndex(p => p.id === id);
-      if (existingIdx > -1) {
-        const existing = savedPortfolio[existingIdx];
-        pnl = (price - existing.avgPrice) * qty;
-        existing.qty -= qty;
-        if (existing.qty <= 0) {
-          savedPortfolio.splice(existingIdx, 1);
-        }
+      if (existingIdx === -1) {
+        return false;
+      }
+      const existing = savedPortfolio[existingIdx];
+      const sellQty = Math.min(qty, existing.qty);
+      if (sellQty <= 0) {
+        return false;
+      }
+      soldQty = sellQty;
+      pnl = (price - existing.avgPrice) * sellQty;
+      existing.qty -= sellQty;
+      if (existing.qty <= 0) {
+        savedPortfolio.splice(existingIdx, 1);
       }
     } else {
       // If no ID provided (e.g. from general sell button without tooltip), sell FIFO from all lots
@@ -1908,7 +3055,7 @@ walletCash += tradeValue; // Add full sale amount to cash
         if (qtyToSell <= 0) break;
         const sellQty = Math.min(lot.qty, qtyToSell);
         pnl += (price - lot.avgPrice) * sellQty;
-        
+        soldQty += sellQty;
         if (lot.qty <= qtyToSell) {
           qtyToSell -= lot.qty;
           savedPortfolio = savedPortfolio.filter(p => p.id !== lot.id);
@@ -1918,7 +3065,12 @@ walletCash += tradeValue; // Add full sale amount to cash
         }
       }
     }
-    tradeHistory.push({ type: "SELL", symbol, qty, price, timestamp, pnl });
+    if (soldQty <= 0) {
+      return false;
+    }
+    walletCash += soldQty * price;
+    tradeHistory.push({ type: "SELL", symbol, qty: soldQty, price, timestamp, pnl });
+    if (tradeHistory.length > 500) tradeHistory.splice(0, tradeHistory.length - 500);
   }
   updateStorage();
   renderPortfolio();
@@ -1964,20 +3116,21 @@ function renderSignals() {
   
   if (els.headerSignal) {
     els.headerSignal.textContent = activeSignals.action.toUpperCase();
-    els.headerSignal.className = dirClass === "positive" ? "bg-green text-black" : dirClass === "negative" ? "bg-red text-black" : "bg-panel text-white";
-    els.headerSignal.style.backgroundColor = dirClass === "positive" ? "var(--green)" : dirClass === "negative" ? "var(--red)" : "var(--panel)";
-    els.headerSignal.style.color = dirClass !== "neutral" ? "var(--bg)" : "inherit";
+    els.headerSignal.className = `signal-badge ${dirClass}`;
+    els.headerSignal.style.backgroundColor = "";
+    els.headerSignal.style.color = "";
     if (els.headerTarget) els.headerTarget.textContent = activeSignals.targetPrice ? `Target: ${formatPrice(activeSignals.targetPrice)}` : '';
   }
 }
 
 function renderPulse() {
   if (!pulse) return;
+  const pulseValue = (value, fallback = "--") => value == null || value === "" ? fallback : value;
   els.pulse.innerHTML = `
-    <div><span>Up</span><strong>${pulse.advancers}</strong></div>
-    <div><span>Down</span><strong>${pulse.decliners}</strong></div>
-    <div><span>Feeds</span><strong>${pulse.liveFeeds} LIVE</strong></div>
-    <div><span>Notional</span><strong>${formatVolume(pulse.notionalVolume)}</strong></div>
+    <div><span>Up</span><strong>${pulseValue(pulse.advancers)}</strong></div>
+    <div><span>Down</span><strong>${pulseValue(pulse.decliners)}</strong></div>
+    <div><span>Feeds</span><strong>${pulseValue(pulse.liveFeeds)} LIVE</strong></div>
+    <div><span>Notional</span><strong>${pulse.notionalVolume == null ? "--" : formatVolume(pulse.notionalVolume)}</strong></div>
   `;
 
   const movers = [...quotes].sort((a, b) => Math.abs(b.changePercent || 0) - Math.abs(a.changePercent || 0)).slice(0, 5);
@@ -1985,9 +3138,9 @@ function renderPulse() {
     .map((quote) => {
       const width = Math.min(100, Math.abs(quote.changePercent || 0) * 14);
       return `
-        <div class="mover-row" style="cursor: pointer;" onclick="selectSymbol('${quote.symbol}')">
+        <div class="mover-row" onclick="selectSymbol('${quote.symbol}')">
           <span class="clickable-ticker">${quote.symbol}</span>
-          <div class="mover-bar"><i class="${toneClass(quote.change)}" style="width:${width}%"></i></div>
+          <div class="mover-bar"><i class="${toneClass(quote.change)}" style="--mover-width:${width}%"></i></div>
           <strong class="${toneClass(quote.change)}">${quote.changePercent > 0 ? "+" : ""}${(quote.changePercent || 0).toFixed(2)}%</strong>
         </div>
       `;
@@ -2000,6 +3153,8 @@ function renderPulse() {
       return `<div class="alert-row ${alert.level}"><strong class="clickable-ticker" onclick="selectSymbol('${alert.symbol}')">${alert.symbol}</strong><span>${cleanMessage}</span></div>`;
     })
     .join("");
+  enhanceInteractiveRows(els.movers, ".mover-row");
+  enhanceInteractiveRows(els.alerts, ".clickable-ticker");
 }
 
 function renderFocus() {
@@ -2383,7 +3538,7 @@ function renderBook(book) {
       const sizePct = Math.min(100, Math.max(5, (row.size / maxSize) * 100));
       const div = document.createElement("div");
       div.className = `book-row ${className}`;
-      div.innerHTML = `<div class="book-row-bg" style="width: ${sizePct}%"></div><span>${formatPrice(row.price)}</span><span>${formatPrice(row.size)}</span><small>${row.orders || ""}</small>`;
+      div.innerHTML = `<div class="book-row-bg" style="--depth-width:${sizePct}%"></div><span>${formatPrice(row.price)}</span><span>${formatPrice(row.size)}</span><small>${row.orders || ""}</small>`;
       container.appendChild(div);
     });
   };
@@ -2409,6 +3564,9 @@ function renderTape(payload) {
 }
 
 async function loadDesk() {
+  if (deskLoadInFlight) return;
+  deskLoadInFlight = true;
+  try {
   let symbols = [];
   if (activeTab === "watchlist") symbols = savedWatchlist;
   else if (activeTab === "portfolio") symbols = Array.from(new Set(savedPortfolio.map(p => p.symbol)));
@@ -2442,6 +3600,9 @@ async function loadDesk() {
   renderWallet();
   renderTradeTicket();
   processPendingOrders();
+  } finally {
+    deskLoadInFlight = false;
+  }
 }
 
 async function loadCandles() {
@@ -2501,7 +3662,7 @@ async function loadNews() {
       if (item.ticker) {
         const changeStr = item.tickerChange ? `${item.tickerChange > 0 ? "+" : ""}${item.tickerChange.toFixed(2)}%` : "";
         const changeClass = item.tickerChange > 0 ? "positive" : (item.tickerChange < 0 ? "negative" : "neutral");
-        tickerBadge = `<span class="news-ticker-badge" style="cursor:pointer;" onclick="selectSymbol('${item.ticker}')">${item.ticker} <span class="${changeClass}">${changeStr}</span></span>`;
+        tickerBadge = `<span class="news-ticker-badge" onclick="selectSymbol('${item.ticker}')">${item.ticker} <span class="${changeClass}">${changeStr}</span></span>`;
       }
       
       return `
@@ -2514,19 +3675,31 @@ async function loadNews() {
         </div>
       `;
     }).join("");
+    enhanceInteractiveRows(list, ".news-ticker-badge");
   } catch (err) {
     console.error("News error", err);
   }
 }
 
 async function refreshAll() {
+  let hadError = false;
+  const showDeskError = (error) => {
+    const message = error?.message || "Backend unavailable";
+    const target = activeTab === "watchlist" ? els.watchlist : activeTab === "portfolio" ? els.portfolioList : els.historyList;
+    if (target) {
+      target.classList.remove("loading");
+      target.innerHTML = `<div class="empty-state"><strong>Market data unavailable</strong><span>${message}</span><button type="button" onclick="refreshAll()">Try again</button></div>`;
+    }
+    hadError = true;
+    setStatus(`Backend unavailable: ${message}`, "error");
+  };
   try {
-    try { await loadDesk(); } catch (e) { console.error("loadDesk failed", e); }
-    try { await loadDetail(activeSymbol); } catch (e) { console.error("loadDetail failed", e); }
-    try { await loadCandles(); } catch (e) { console.error("loadCandles failed", e); }
-    try { await loadFlow(activeSymbol); } catch (e) { console.error("loadFlow failed", e); }
-    try { await loadNews(); } catch (e) { console.error("loadNews failed", e); }
-    setStatus(`API ${apiBase || "same-origin"} ${new Date().toLocaleTimeString([], { hour12: false })}`, "ok");
+    try { await loadDesk(); } catch (e) { console.error("loadDesk failed", e); showDeskError(e); }
+    try { await loadDetail(activeSymbol); } catch (e) { hadError = true; console.error("loadDetail failed", e); }
+    try { await loadCandles(); } catch (e) { hadError = true; console.error("loadCandles failed", e); }
+    try { await loadFlow(activeSymbol); } catch (e) { hadError = true; console.error("loadFlow failed", e); }
+    try { await loadNews(); } catch (e) { hadError = true; console.error("loadNews failed", e); }
+    if (!hadError) setStatus(`API ${apiBase || "same-origin"} ${new Date().toLocaleTimeString([], { hour12: false })}`, "ok");
   } catch (error) {
     setStatus(`Backend unavailable: ${error.message}`, "error");
   }
@@ -2711,16 +3884,22 @@ els.btnSell.addEventListener("click", () => focusTradeTicket("sell"));
 
 function openBotPage() {
   hydrateBotForm();
+  updateFeesLabel();
+  updateMultiplierLabel();
   renderBotStatus();
   renderBotLog();
   document.querySelector(".desk-shell")?.classList.add("hidden");
   els.botModal?.classList.remove("hidden");
+  document.documentElement.classList.add("bot-workspace-open");
+  document.body.classList.add("bot-workspace-open");
 }
 
 function closeBotPage() {
   if (!botState.running) readBotConfig();
   els.botModal?.classList.add("hidden");
   document.querySelector(".desk-shell")?.classList.remove("hidden");
+  document.documentElement.classList.remove("bot-workspace-open");
+  document.body.classList.remove("bot-workspace-open");
 }
 
 els.btnBot?.addEventListener("click", () => {
@@ -2738,10 +3917,16 @@ els.botClearLog?.addEventListener("click", () => {
   botPersistState();
   appendTerminalLine("[BOT] audit logs cleared", "ok");
 });
-[els.botUniverseMode, document.querySelector("#bot-duration"), ...botModeIds().map(mode => botInputFor(mode))].forEach(input => {
+document.querySelector("#polymarket-clear-audit")?.addEventListener("click", clearPolymarketAudit);
+document.querySelector("#polymarket-reset")?.addEventListener("click", () => {
+  resetBots();
+  appendTerminalLine("[BOT] Polymarket paper state reset", "ok");
+});
+[els.botUniverseMode, document.querySelector("#bot-duration"), document.querySelector("#bot-observe"), document.querySelector("#bot-strategy-mode"), document.querySelector("#polymarket-interval"), ...botModeIds().flatMap(mode => [document.querySelector(`#polymarket-capital-${mode}`), document.querySelector(`#polymarket-enabled-${mode}`), document.querySelector(`#bot-enabled-${mode}`)]), ...botModeIds().map(mode => botInputFor(mode))].forEach(input => {
   input?.addEventListener("change", () => {
     if (!botState.running) {
       readBotConfig();
+      syncBotEnableInputs();
       loadDesk();
     }
     renderBotStatus();
@@ -2751,6 +3936,72 @@ els.botReset?.addEventListener("click", () => {
   resetBots();
   appendTerminalLine("[BOT] bots reset", "ok");
 });
+document.querySelectorAll(".bot-view-switch [data-view]").forEach(button => {
+  button.addEventListener("click", () => {
+    if (botState.running) return;
+    const strategy = document.querySelector("#bot-strategy-mode");
+    if (!strategy) return;
+    strategy.value = button.dataset.view === "polymarket" ? "polymarket" : "swarm";
+    strategy.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+});
+
+function updateFeesLabel() {
+  const toggle = document.querySelector("#bot-fees-enabled");
+  const label = document.querySelector("#bot-fees-label");
+  if (!toggle || !label) return;
+  label.textContent = toggle.checked ? "On" : "Off";
+  label.className = toggle.checked ? "on" : "off";
+}
+document.querySelector("#bot-fees-enabled")?.addEventListener("change", () => {
+  updateFeesLabel();
+  if (!botState.running) {
+    readBotConfig();
+    loadDesk();
+  }
+  appendTerminalLine("[BOT] trading fees " + (botConfig.feesEnabled ? "enabled" : "disabled") + " (fee-edge gate " + (botConfig.feesEnabled ? "active" : "bypassed") + ")", "ok");
+  renderBotStatus();
+});
+function updateMultiplierLabel() {
+  const toggle = document.querySelector("#bot-multiplier-enabled");
+  const label = document.querySelector("#bot-multiplier-label");
+  if (!toggle || !label) return;
+  label.textContent = toggle.checked ? "On" : "Off";
+  label.className = toggle.checked ? "on" : "off";
+}
+document.querySelector("#bot-multiplier-enabled")?.addEventListener("change", () => {
+  updateMultiplierLabel();
+  if (!botState.running) {
+    readBotConfig();
+    loadDesk();
+  }
+  appendTerminalLine("[BOT] free-hand momentum " + (botConfig.multiplierEnabled ? "enabled" : "disabled") + " (adaptive cash allocation; no fixed target; paper only)", botConfig.multiplierEnabled ? "warn" : "ok");
+  renderBotStatus();
+});
+els.botModal?.addEventListener("click", (event) => {
+  const expand = event.target.closest?.(".swarm-expand");
+  if (expand && els.botModal.contains(expand)) {
+    const cot = expand.closest(".swarm-card")?.querySelector(".swarm-cot");
+    if (cot) {
+      const open = !cot.classList.toggle("hidden");
+      expand.textContent = open ? "⌃" : "⌄";
+    }
+    return;
+  }
+  const tab = event.target.closest?.("[data-tab]");
+  if (!tab || !els.botModal.contains(tab)) return;
+  const card = tab.closest("[data-bot-mode]");
+  if (!card) return;
+  card.querySelectorAll(".bot-tabs [data-tab]").forEach(btn => btn.classList.toggle("active", btn === tab));
+  card.querySelectorAll(".bot-tab-panel").forEach(panel => panel.classList.toggle("active", panel.dataset.panel === tab.dataset.tab));
+});
+
+setInterval(() => {
+  if (els.botModal && !els.botModal.classList.contains("hidden")) {
+    updateBotClock();
+    botTimelineSeg();
+  }
+}, 1000);
 els.ticketBuy?.addEventListener("click", () => focusTradeTicket("buy"));
   els.ticketSell?.addEventListener("click", () => focusTradeTicket("sell"));
 
@@ -2842,7 +4093,7 @@ function startTimers() {
   if (refreshTimer) clearInterval(refreshTimer);
   if (flowTimer) clearInterval(flowTimer);
   if (candleTimer) clearInterval(candleTimer);
-  refreshTimer = setInterval(loadDesk, DESK_INTERVAL_MS);
+  refreshTimer = setInterval(() => { loadDesk().catch(e => console.error("loadDesk failed", e)); }, DESK_INTERVAL_MS);
   flowTimer = setInterval(refreshFlowOnly, FLOW_INTERVAL_MS);
   candleTimer = setInterval(refreshCandlesOnly, CANDLE_REFRESH_MS);
 }
@@ -2866,6 +4117,7 @@ function renderSearchResults() {
     </div>
   `).join("");
   searchDropdown.classList.remove("hidden");
+  enhanceInteractiveRows(searchDropdown, ".search-item");
 }
 
 window.selectSearchResult = async function(index) {
@@ -3353,6 +4605,7 @@ startTimers();
 
 // Explicit Window Exports for OOP Bots
 window.BOT_STALE_TICK_LIMIT = BOT_STALE_TICK_LIMIT;
+window.BOT_MIN_SWARM_SAMPLES = 5;
 window.renderBotStatus = renderBotStatus;
 window.botPortfolioSnapshot = botPortfolioSnapshot;
 window.botHeldQuantity = botHeldQuantity;
@@ -3362,7 +4615,9 @@ window.logBotDecision = logBotDecision;
 window.botCapital = botCapital;
 window.botAverageEntry = botAverageEntry;
 window.botSignalFor = botSignalFor;
+window.botAppendRunAudit = botAppendRunAudit;
 window.botHistoryStats = botHistoryStats;
 window.botMarketAgreement = botMarketAgreement;
 window.clamp = clamp;
 window.rememberBotPrice = rememberBotPrice;
+window.botRunTiming = botRunTiming;

@@ -3,384 +3,247 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Trader Desk Pro</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#080c12" />
+    <title>Trader Desk</title>
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div class="desk-shell">
-      <header class="top-bar">
-        <div>
-          <p class="eyebrow">Trader Desk</p>
-          <h1>Live Command Floor</h1>
-        </div>
-        <label class="command-line" aria-label="Symbol command line">
-          <span>CMD</span>
-          <div class="cmd-input-wrapper" style="position: relative; flex: 1;">
-            <input id="command-input" type="text" autocomplete="off" placeholder="BTC, NVDA, RELIANCE.NS..." style="width: 100%;" />
+    <div class="app-shell">
+      <section class="desk-shell" aria-label="Trader Desk">
+        <header class="desk-bar">
+          <div class="product-mark" aria-label="Trader Desk">
+            <span class="product-icon" aria-hidden="true">T</span>
+            <div><strong>Trader Desk</strong><span>Paper trading terminal</span></div>
+          </div>
+
+          <nav class="desk-nav" aria-label="Workspace">
+            <button class="nav-item active" type="button">Desk</button>
+            <button id="btn-bot" class="nav-item" type="button">Bot desk</button>
+          </nav>
+
+          <label class="command-bar" aria-label="Command search">
+            <span class="command-key">⌘</span>
+            <input id="command-input" type="text" autocomplete="off" placeholder="Find a symbol or type a command" />
+            <kbd>/</kbd>
             <div id="search-dropdown" class="search-dropdown hidden"></div>
-          </div>
-        </label>
-        <div class="clock-stack">
-          <span id="market-state">SYNCING</span>
-          <strong id="desk-clock">--:--:--</strong>
-        </div>
-      </header>
-
-      <main class="floor">
-        <aside class="watch-rail" aria-label="Watchlist">
-          <div class="panel-head">
-            <div class="rail-tabs" id="rail-tabs">
-              <button data-tab="watchlist" class="active">Watchlist</button>
-              <button data-tab="history">History</button>
-              <button data-tab="portfolio">Portfolio</button>
-            </div>
-            <button id="refresh-button" type="button">Sync</button>
-          </div>
-          
-          <div id="watchlist-controls" style="display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel);">
-             <select id="watchlist-selector" style="flex: 1; font-size: 11px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text);"></select>
-             <button id="watchlist-add" style="padding: 2px 6px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" title="New Watchlist">+</button>
-             <button id="watchlist-rename" style="padding: 2px 6px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" title="Rename Watchlist">✎</button>
-             <button id="watchlist-delete" style="padding: 2px 6px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" title="Delete Watchlist">✕</button>
-          </div>
-
-          <div id="watchlist" class="watchlist loading" style="height: calc(100% - 32px);">Loading symbols...</div>
-          
-          <div id="history-tab" class="watchlist hidden" style="display: flex; flex-direction: column;">
-            <div id="history-chart" style="width: 100%; height: 120px; border-bottom: 1px solid var(--line); flex-shrink: 0;"></div>
-            <div id="history-list" style="flex: 1; overflow-y: auto;"></div>
-          </div>
-          
-          <div id="portfolio-list" class="watchlist hidden"></div>
-          
-          <div id="wallet-panel" class="wallet-panel">
-            <p class="eyebrow" style="margin-bottom: 8px;">Paper Wallet</p>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span style="font-size: 11px; color: var(--muted);">Balance</span>
-              <strong id="wallet-balance" style="font-size: 14px; cursor: pointer;" onclick="editWalletBalance()">$100,000.00</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 11px; color: var(--muted);">Total P&L</span>
-              <strong id="wallet-pnl" style="font-size: 12px;" class="neutral">0.00%</strong>
-            </div>
-          </div>
-        </aside>
-
-        <section class="focus-panel" aria-label="Selected symbol detail">
-          <div class="focus-head">
-            <div>
-              <p class="eyebrow">Focused Line</p>
-              <h2 id="focus-symbol">--</h2>
-            </div>
-            <div class="quote-hero">
-              <strong id="focus-price">--</strong>
-              <span id="focus-change">--</span>
-            </div>
-            <div class="signal-hero">
-              <strong id="header-signal" style="padding: 2px 6px; border-radius: 4px;">--</strong>
-              <span id="header-target" style="font-size: 12px; color: var(--muted);"></span>
-            </div>
-            <div style="display: flex; gap: 6px;">
-              <button id="btn-buy" class="trade-btn buy-btn">Buy</button>
-              <button id="btn-sell" class="trade-btn sell-btn">Sell</button>
-              <button id="btn-bot" class="trade-btn bot-btn">Bot</button>
-              <button id="pin-button" class="pin-btn">Pin</button>
-            </div>
-          </div>
-          <div class="metric-row">
-            <div><span>High</span><strong id="metric-high">--</strong></div>
-            <div><span>Low</span><strong id="metric-low">--</strong></div>
-            <div><span>Volume</span><strong id="metric-volume">--</strong></div>
-            <div><span>Venue</span><strong id="metric-venue">--</strong></div>
-          </div>
-          <div id="chart-wrap" class="chart-wrap">
-            <div class="chart-toolbar" aria-label="Chart controls">
-              <div id="timeframe-controls" class="segmented glass-panel">
-                <button type="button" data-interval="1m" class="active">1m</button>
-                <button type="button" data-interval="5m">5m</button>
-                <button type="button" data-interval="15m">15m</button>
-                <button type="button" data-interval="1h">1h</button>
-                <button type="button" data-interval="6h">6h</button>
-                <button type="button" data-interval="1d">1d</button>
-              </div>
-              <div id="chart-mode-controls" class="segmented glass-panel">
-                <button type="button" data-mode="candles" class="active">Candles</button>
-                <button type="button" data-mode="line">Line</button>
-              </div>
-              <div id="ema-controls" class="segmented glass-panel" style="margin-left: 10px;">
-                <button type="button" id="btn-toggle-ema" class="active">EMA On</button>
-              </div>
-            </div>
-            <div id="price-chart" style="width: 100%; height: 100%;"></div>
-          </div>
-          
-          <div class="lightning-strip glass-panel">
-            <div class="strip-left">
-              <span id="pos-tracker">NO OPEN POSITION</span>
-            </div>
-            <div class="strip-right">
-              <button id="btn-lightning-buy" class="action-btn buy-btn">BUY MKT</button>
-              <button id="btn-lightning-sell" class="action-btn sell-btn">SELL MKT</button>
-              <button id="btn-lightning-flatten" class="action-btn flatten-btn">FLATTEN</button>
-            </div>
-          </div>
-
-          <section class="trade-ticket glass-panel" aria-label="Order ticket">
-            <div class="ticket-side">
-              <button type="button" id="ticket-buy" class="active" data-side="buy">Buy</button>
-              <button type="button" id="ticket-sell" data-side="sell">Sell</button>
-            </div>
-            <div class="ticket-field">
-              <label for="ticket-size">Size</label>
-              <input id="ticket-size" type="number" min="0" step="any" value="1000" />
-            </div>
-            <div class="ticket-mode" aria-label="Size mode">
-              <button type="button" id="ticket-mode-amount" class="active" data-mode="amount">$</button>
-              <button type="button" id="ticket-mode-shares" data-mode="shares">Shares</button>
-            </div>
-            <div class="ticket-type" aria-label="Order type">
-              <button type="button" id="ticket-market" class="active" data-type="market">Market</button>
-              <button type="button" id="ticket-trigger" data-type="trigger">Trigger</button>
-            </div>
-            <div class="ticket-field trigger-field">
-              <label for="ticket-trigger-price">Trigger</label>
-              <input id="ticket-trigger-price" type="number" min="0" step="any" placeholder="price" disabled />
-            </div>
-            <div class="ticket-preview">
-              <span id="ticket-preview">--</span>
-              <strong id="ticket-risk">--</strong>
-            </div>
-            <button type="button" id="ticket-submit" class="ticket-submit">Place</button>
-          </section>
-
-          <div id="pending-orders" class="pending-orders" aria-label="Pending trigger orders"></div>
-
-          <p id="chart-caption" class="caption">Waiting for intraday candles.</p>
-          <div class="lower-console">
-            <section>
-              <h3>Market Pulse</h3>
-              <div id="pulse-grid" class="pulse-grid"></div>
-            </section>
-            <section>
-              <h3>Live News & AI Sentiment</h3>
-              <div id="news-list" class="news-list"></div>
-            </section>
-            <section>
-              <h3>Momentum</h3>
-              <div id="movers-list" class="movers-list"></div>
-            </section>
-            <section>
-              <h3>Technical Indicators</h3>
-              <div id="signals-list" class="signals-list"></div>
-            </section>
-          </div>
-        </section>
-
-        <aside class="flow-panel" aria-label="Order flow and tape">
-          <div class="panel-head">
-            <span>Flow</span>
-            <span id="flow-source">--</span>
-          </div>
-          <section class="book-box">
-            <h3>Book</h3>
-            <div class="book-columns">
-              <div>
-                <p>Bid</p>
-                <div id="book-bids" class="book-side"></div>
-              </div>
-              <div>
-                <p>Ask</p>
-                <div id="book-asks" class="book-side"></div>
-              </div>
-            </div>
-          </section>
-          <section class="tape-box">
-            <h3>Tape</h3>
-            <div id="tape-list" class="tape-list"></div>
-          </section>
-          <section class="alerts-box">
-            <h3>Alerts</h3>
-            <div id="alerts-list" class="alerts-list"></div>
-          </section>
-          <section class="terminal-box" aria-label="Trading terminal">
-            <div class="terminal-head">
-              <h3>Action Log</h3>
-              <button id="terminal-clear" type="button" title="Clear terminal">Clear</button>
-            </div>
-            <div id="terminal-output" class="terminal-output" aria-live="polite">
-              <div class="terminal-line ok">Type /help in CMD for commands.</div>
-            </div>
-          </section>
-        </aside>
-      </main>
-
-      <footer class="status-tape">
-        <div id="ticker-tape" class="ticker-tape">Waiting for backend quotes...</div>
-        <div id="api-status" class="api-status">API: connecting</div>
-      </footer>
-    </div>
-
-        <section id="bot-modal" class="bot-page hidden" aria-label="Autonomous paper trading bots">
-      <header class="bot-page-head">
-        <div class="bot-nav">
-          <button type="button" id="bot-close" class="bot-back">Back</button>
-          <button type="button" id="bot-home" class="bot-back">Home</button>
-        </div>
-        <div>
-          <p class="eyebrow">Autonomous Paper Trader</p>
-          <h2>Three Desk Bots</h2>
-        </div>
-        <div class="bot-actions">
-          <button type="button" id="bot-start" class="confirm-btn">Start</button>
-          <button type="button" id="bot-stop" class="confirm-btn danger hidden">Stop</button>
-        </div>
-      </header>
-
-      <main class="bot-page-grid bot-page-grid-v2">
-        <section class="bot-control-panel bot-control-panel-v2">
-          <div class="bot-status-card">
-            <span id="bot-state">Stopped</span>
-            <strong id="bot-summary">Three autonomous paper bots idle.</strong>
-          </div>
-          <label class="bot-duration-card" for="bot-duration">
-            <span>Run time</span>
-            <div>
-              <input type="number" id="bot-duration" min="1" max="1440" step="1" value="30" />
-              <em>minutes</em>
-            </div>
           </label>
-          <label class="bot-duration-card bot-universe-card" for="bot-universe-mode">
-            <span>Universe</span>
-            <select id="bot-universe-mode">
-              <!-- Dynamically populated from watchlists -->
-            </select>
-          </label>
-          <button type="button" id="bot-clear-log" class="bot-clear-all">Clear audit logs</button>
-          <button type="button" id="bot-reset" class="bot-clear-all bot-reset-all">Reset bots</button>
-        </section>
 
-        <section class="bot-modes-grid" aria-label="Bot modes">
-          <article class="bot-mode-card calm" data-bot-mode="calm">
-            <div class="bot-mode-head">
-              <div>
-                <p class="eyebrow">Calm</p>
-                <h3>Thoughtful Compounding</h3>
-              </div>
-              <strong id="bot-state-calm">Idle</strong>
-            </div>
-            <label class="bot-capital-card" for="bot-capital-calm">
-              <span>Capital</span>
-              <div><span>$</span><input type="number" id="bot-capital-calm" min="0" step="10" value="100" /></div>
-            </label>
-            <div class="bot-metric-grid compact">
-              <div><span>Value</span><strong id="bot-value-calm">--</strong></div>
-              <div><span>P&L</span><strong id="bot-pnl-calm">--</strong></div>
-              <div><span>Cash</span><strong id="bot-cash-calm">--</strong></div>
-              <div><span>Deployed</span><strong id="bot-deployed-calm">--</strong></div>
-            </div>
-            <div class="bot-mode-columns">
-              <div>
-                <div class="bot-log-head compact"><h3>Portfolio</h3></div>
-                <div id="bot-positions-calm" class="bot-positions mode-scroll"></div>
-              </div>
-              <div>
-                <div class="bot-log-head compact"><h3>Audit</h3></div>
-                <div id="bot-log-calm" class="bot-log mode-scroll"></div>
-              </div>
-            </div>
-          </article>
-
-          <article class="bot-mode-card normal" data-bot-mode="normal">
-            <div class="bot-mode-head">
-              <div>
-                <p class="eyebrow">Normal</p>
-                <h3>Balanced Trader</h3>
-              </div>
-              <strong id="bot-state-normal">Idle</strong>
-            </div>
-            <label class="bot-capital-card" for="bot-capital-normal">
-              <span>Capital</span>
-              <div><span>$</span><input type="number" id="bot-capital-normal" min="0" step="10" value="100" /></div>
-            </label>
-            <div class="bot-metric-grid compact">
-              <div><span>Value</span><strong id="bot-value-normal">--</strong></div>
-              <div><span>P&L</span><strong id="bot-pnl-normal">--</strong></div>
-              <div><span>Cash</span><strong id="bot-cash-normal">--</strong></div>
-              <div><span>Deployed</span><strong id="bot-deployed-normal">--</strong></div>
-            </div>
-            <div class="bot-mode-columns">
-              <div>
-                <div class="bot-log-head compact"><h3>Portfolio</h3></div>
-                <div id="bot-positions-normal" class="bot-positions mode-scroll"></div>
-              </div>
-              <div>
-                <div class="bot-log-head compact"><h3>Audit</h3></div>
-                <div id="bot-log-normal" class="bot-log mode-scroll"></div>
-              </div>
-            </div>
-          </article>
-
-          <article class="bot-mode-card aggressive" data-bot-mode="aggressive">
-            <div class="bot-mode-head">
-              <div>
-                <p class="eyebrow">Aggressive</p>
-                <h3>Fast Momentum</h3>
-              </div>
-              <strong id="bot-state-aggressive">Idle</strong>
-            </div>
-            <label class="bot-capital-card" for="bot-capital-aggressive">
-              <span>Capital</span>
-              <div><span>$</span><input type="number" id="bot-capital-aggressive" min="0" step="10" value="100" /></div>
-            </label>
-            <div class="bot-metric-grid compact">
-              <div><span>Value</span><strong id="bot-value-aggressive">--</strong></div>
-              <div><span>P&L</span><strong id="bot-pnl-aggressive">--</strong></div>
-              <div><span>Cash</span><strong id="bot-cash-aggressive">--</strong></div>
-              <div><span>Deployed</span><strong id="bot-deployed-aggressive">--</strong></div>
-            </div>
-            <div class="bot-mode-columns">
-              <div>
-                <div class="bot-log-head compact"><h3>Portfolio</h3></div>
-                <div id="bot-positions-aggressive" class="bot-positions mode-scroll"></div>
-              </div>
-              <div>
-                <div class="bot-log-head compact"><h3>Audit</h3></div>
-                <div id="bot-log-aggressive" class="bot-log mode-scroll"></div>
-              </div>
-            </div>
-          </article>
-        </section>
-      </main>
-    </section>
-
-    <!-- Order Modal -->
-    <div id="order-modal" class="modal-overlay hidden">
-      <div class="modal-box">
-        <div class="modal-header">
-          <h3 id="modal-title">Trade --</h3>
-          <button type="button" id="modal-close" class="modal-close">&times;</button>
-        </div>
-        <div class="modal-body">
-          <p id="modal-price" class="modal-price">--</p>
-          <div class="input-group">
-            <label for="order-qty">Quantity</label>
-            <input type="number" id="order-qty" step="any" min="0" value="1" />
+          <div class="desk-status" aria-live="polite">
+            <span id="market-state" class="live-state">Connecting</span>
+            <strong id="desk-clock">--:--:--</strong>
           </div>
-          <div class="input-group">
-            <label>Total Value</label>
-            <span id="order-total" style="font-weight: bold;">$0.00</span>
-          </div>
-          <button type="button" id="modal-confirm" class="confirm-btn">Confirm</button>
-        </div>
+        </header>
+
+        <main class="desk-main">
+          <aside class="watch-column" aria-label="Markets">
+            <header class="column-heading">
+              <div><span class="section-kicker">Monitor</span><h1>Markets</h1></div>
+              <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh prices" title="Refresh prices">↻</button>
+            </header>
+
+            <nav id="rail-tabs" class="segment-tabs" aria-label="Market tabs" role="tablist">
+              <button type="button" class="active" role="tab" aria-selected="true" data-tab="watchlist">Watchlist</button>
+              <button type="button" role="tab" aria-selected="false" data-tab="portfolio">Positions</button>
+              <button type="button" role="tab" aria-selected="false" data-tab="history">History</button>
+            </nav>
+
+            <div id="watchlist-controls" class="list-tools">
+              <label class="select-wrap"><span class="sr-only">Choose watchlist</span><select id="watchlist-selector"></select></label>
+              <div class="tool-actions">
+                <button id="watchlist-add" type="button" aria-label="New watchlist" title="New watchlist">+</button>
+                <button id="watchlist-rename" type="button" aria-label="Rename watchlist" title="Rename watchlist">✎</button>
+                <button id="watchlist-delete" type="button" aria-label="Delete watchlist" title="Delete watchlist">×</button>
+              </div>
+            </div>
+
+            <div id="watchlist" class="market-list loading" role="tabpanel" aria-live="polite">Loading markets…</div>
+            <div id="portfolio-list" class="market-list hidden" role="tabpanel"></div>
+            <div id="history-tab" class="market-list history-panel hidden" role="tabpanel">
+              <div id="history-chart" class="history-chart" aria-label="Trade history chart"></div>
+              <div id="history-list" class="history-list"></div>
+            </div>
+
+            <section id="wallet-panel" class="account-panel" aria-label="Paper account">
+              <div><span class="section-kicker">Buying power</span><strong id="wallet-balance" class="account-balance" role="button" tabindex="0" onclick="editWalletBalance()">$100,000.00</strong></div>
+              <div class="account-pnl"><span>Day P&amp;L</span><strong id="wallet-pnl" class="neutral">0.00%</strong></div>
+            </section>
+          </aside>
+
+          <section class="market-column" aria-label="Market detail">
+            <header class="instrument-strip">
+              <div class="instrument-name">
+                <span class="section-kicker">Focused market</span>
+                <h2 id="focus-symbol">--</h2>
+              </div>
+              <div class="quote-block">
+                <strong id="focus-price">--</strong>
+                <span id="focus-change" class="neutral">--</span>
+              </div>
+              <div class="instrument-stat"><span>High</span><strong id="metric-high">--</strong></div>
+              <div class="instrument-stat"><span>Low</span><strong id="metric-low">--</strong></div>
+              <div class="instrument-stat"><span>Volume</span><strong id="metric-volume">--</strong></div>
+              <div class="instrument-stat venue"><span>Venue</span><strong id="metric-venue">--</strong></div>
+              <div class="signal-block"><span>Signal</span><strong id="header-signal" class="signal-badge">--</strong><small id="header-target">--</small></div>
+              <div class="instrument-actions" aria-label="Selected market actions">
+                <button id="btn-buy" class="action-button buy" type="button">Buy</button>
+                <button id="btn-sell" class="action-button sell" type="button">Sell</button>
+                <button id="pin-button" class="action-button" type="button">Pin</button>
+              </div>
+            </header>
+
+            <section class="chart-card" aria-label="Price chart">
+              <header class="chart-head">
+                <div><span class="section-kicker">Price action</span><strong>Intraday chart</strong></div>
+                <span id="chart-caption" class="chart-caption">Loading candles…</span>
+                <button id="btn-toggle-ema" class="quiet-control" type="button">EMA</button>
+              </header>
+              <div class="chart-controls">
+                <div id="timeframe-controls" class="control-group" role="group" aria-label="Chart timeframe">
+                  <button type="button" data-interval="1m" class="active">1m</button>
+                  <button type="button" data-interval="5m">5m</button>
+                  <button type="button" data-interval="15m">15m</button>
+                  <button type="button" data-interval="1h">1h</button>
+                  <button type="button" data-interval="6h">6h</button>
+                  <button type="button" data-interval="1d">1d</button>
+                </div>
+                <div id="chart-mode-controls" class="control-group" role="group" aria-label="Chart type">
+                  <button type="button" data-mode="candles" class="active">Candles</button>
+                  <button type="button" data-mode="line">Line</button>
+                </div>
+              </div>
+              <div id="price-chart" class="price-chart"></div>
+            </section>
+
+            <section class="position-strip" aria-label="Position actions">
+              <div><span class="section-kicker">Open position</span><strong id="pos-tracker">No open position</strong></div>
+              <div class="position-actions">
+                <button id="btn-lightning-buy" class="action-button buy" type="button">Buy market</button>
+                <button id="btn-lightning-sell" class="action-button sell" type="button">Sell market</button>
+                <button id="btn-lightning-flatten" class="action-button" type="button">Flatten</button>
+              </div>
+            </section>
+
+            <section class="insight-grid" aria-label="Market intelligence">
+              <article class="insight-card"><header><span>Market pulse</span><small>Broad context</small></header><div id="pulse-grid" class="pulse-grid"></div></article>
+              <article class="insight-card"><header><span>Technical signal</span><small>Live model</small></header><div id="signals-list" class="signals-list"></div></article>
+              <article class="insight-card"><header><span>Momentum</span><small>Most active</small></header><div id="movers-list" class="movers-list"></div></article>
+              <article class="insight-card"><header><span>News &amp; sentiment</span><small>Latest</small></header><div id="news-list" class="news-list"></div></article>
+            </section>
+          </section>
+
+          <aside class="execution-column" aria-label="Order execution and market flow">
+            <section class="order-card" aria-label="Order ticket">
+              <header class="order-heading"><div><span class="section-kicker">Order ticket</span><h3>Paper order</h3></div><span>Paper only</span></header>
+              <div class="ticket-side control-group" role="group" aria-label="Order side"><button id="ticket-buy" class="active" type="button">Buy</button><button id="ticket-sell" type="button">Sell</button></div>
+              <label class="ticket-field"><span>Size</span><input id="ticket-size" type="number" min="0" step="any" value="1000" /></label>
+              <div class="ticket-split">
+                <div class="ticket-mode control-group" role="group" aria-label="Size mode"><button id="ticket-mode-amount" class="active" type="button">$ Amount</button><button id="ticket-mode-shares" type="button">Shares</button></div>
+                <div class="ticket-type control-group" role="group" aria-label="Order type"><button id="ticket-market" class="active" type="button">Market</button><button id="ticket-trigger" type="button">Trigger</button></div>
+              </div>
+              <label class="ticket-field trigger-field"><span>Trigger price</span><input id="ticket-trigger-price" type="number" min="0" step="any" placeholder="Price" disabled /></label>
+              <div id="ticket-preview" class="ticket-preview">Enter size</div>
+              <div id="ticket-risk" class="ticket-risk">--</div>
+              <button id="ticket-submit" class="submit-order buy" type="button">Place buy order</button>
+              <div id="pending-orders" class="pending-orders"></div>
+            </section>
+
+            <section class="flow-card book-card" aria-label="Order book">
+              <header><div><span class="section-kicker">Order flow</span><h3>Level 2 book</h3></div><span id="flow-source">--</span></header>
+              <div class="book-columns"><div><span class="book-label">Bids</span><div id="book-bids" class="book-side"></div></div><div><span class="book-label">Asks</span><div id="book-asks" class="book-side"></div></div></div>
+            </section>
+
+            <section class="flow-card tape-card" aria-label="Market stream">
+              <header><div><span class="section-kicker">Market stream</span><h3>Trades &amp; alerts</h3></div></header>
+              <div class="stream-grid"><div><span class="book-label">Last sales</span><div id="tape-list" class="tape-list"></div></div><div><span class="book-label">Alerts</span><div id="alerts-list" class="alerts-list"></div></div></div>
+            </section>
+
+            <section class="flow-card terminal-card" aria-label="Terminal output">
+              <header><div><span class="section-kicker">Command output</span><h3>Activity</h3></div><button id="terminal-clear" class="text-button" type="button">Clear</button></header>
+              <div id="terminal-output" class="terminal-output" aria-live="polite"><div class="terminal-line ok">Type /help in the command bar for commands.</div></div>
+            </section>
+          </aside>
+        </main>
+
+        <footer class="market-tape"><div id="ticker-tape" class="ticker-tape">Waiting for market data…</div><div id="api-status" class="api-status">API connecting</div></footer>
+      </section>
+
+      <section id="bot-modal" class="bot-page hidden" aria-label="Autonomous paper trader">
+        <header class="bot-bar">
+          <div class="bot-bar-left"><button id="bot-close" class="back-button" type="button">← Desk</button><div><span id="bot-page-eyebrow" class="section-kicker">Autonomous paper trader</span><h2 id="bot-page-title">Swarm desk</h2></div></div>
+          <div class="bot-view-switch" role="tablist" aria-label="Bot workspace"><button id="bot-view-swarm" class="active" type="button" data-view="swarm">Swarm</button><button id="bot-view-polymarket" type="button" data-view="polymarket">Polymarket</button></div>
+          <p id="bot-page-subtitle" class="bot-subtitle">Three independent paper strategies, one live market feed.</p>
+          <div class="bot-bar-right"><strong id="bot-clock">--:--:--</strong><button id="bot-start" class="run-button" type="button">Start run</button><button id="bot-stop" class="run-button stop hidden" type="button">Stop run</button><button id="bot-home" class="icon-button" type="button" aria-label="Return to desk">×</button></div>
+        </header>
+
+        <main class="bot-workspace">
+          <section class="bot-run-bar" aria-label="Run controls">
+            <div class="bot-status-card"><span id="bot-state">Stopped</span><strong id="bot-summary">Three autonomous bots are ready.</strong></div>
+            <label class="bot-control" for="bot-strategy-mode"><span>Mode</span><select id="bot-strategy-mode"><option value="swarm">Swarm bots</option><option value="polymarket">Polymarket BTC</option></select></label>
+            <label class="bot-control" for="bot-duration"><span>Run time</span><div><input id="bot-duration" type="number" min="1" max="1440" step="1" value="30" /><em>min</em></div></label>
+            <label class="bot-control" for="bot-observe"><span>Warm-up</span><div><input id="bot-observe" type="number" min="0" max="240" step="1" value="2" /><em>min</em></div></label>
+            <label class="bot-control bot-universe-card" for="bot-universe-mode"><span>Universe</span><select id="bot-universe-mode"></select></label>
+            <label class="bot-toggle" for="bot-fees-enabled"><span>Fees</span><input id="bot-fees-enabled" type="checkbox" /><em id="bot-fees-label">Off</em></label>
+            <label class="bot-toggle" for="bot-multiplier-enabled"><span>Free-hand</span><input id="bot-multiplier-enabled" type="checkbox" /><em id="bot-multiplier-label">Off</em></label>
+            <div class="bot-util-actions"><button id="bot-clear-log" class="text-button" type="button">Clear audit</button><button id="bot-reset" class="text-button danger" type="button">Reset</button></div>
+          </section>
+
+          <section class="bot-overview" aria-label="Combined bot overview">
+            <div class="bot-overview-lead"><span class="section-kicker">Paper portfolio</span><strong id="bot-overview-value">--</strong><span id="bot-overview-pnl" class="positive">--</span></div>
+            <div class="bot-ov-card"><span>Capital</span><strong id="bot-overview-capital">--</strong></div><div class="bot-ov-card"><span>Open positions</span><strong id="bot-overview-open">0</strong></div><div class="bot-ov-card"><span>Decisions</span><strong id="bot-overview-decisions">0</strong></div>
+            <div class="bot-overview-meta"><span>Fees <strong id="bot-overview-fees">Off</strong></span><span>Allocation <strong id="bot-overview-multiplier">Off</strong></span></div>
+          </section>
+
+          <section class="bot-timeline" aria-label="Run timeline">
+            <div><span id="bot-phase-label" class="bot-phase-pill stopped">Stopped</span><span class="bot-timeline-caption">Warm-up, trade, then protect paper capital.</span></div>
+            <div class="bot-phase-track"><div class="bot-phase-seg" data-phase="observe"><span>Warm-up</span><strong id="bot-phase-observe">02:00</strong></div><div class="bot-phase-seg" data-phase="trade"><span>Trade</span><strong id="bot-phase-trade">--:--</strong></div><div class="bot-phase-seg" data-phase="exit"><span>Safety</span><strong id="bot-phase-exit">--:--</strong></div><div class="bot-phase-bar"><i id="bot-phase-progress"></i></div></div>
+            <strong id="bot-total-countdown" class="bot-countdown">--:--</strong>
+          </section>
+
+          <section class="bot-modes-grid" aria-label="Independent bot desks">
+            <article class="bot-mode-card calm" data-bot-mode="calm">
+              <header class="bot-mode-head"><div><span class="section-kicker">Calm</span><h3>Patient compounding</h3></div><label class="bot-enable-toggle" for="bot-enabled-calm"><input id="bot-enabled-calm" type="checkbox" checked /><span>Enabled</span></label><div class="bot-mode-state"><strong id="bot-state-calm">Idle</strong><em id="bot-phase-calm" class="idle">idle</em></div></header>
+              <div class="bot-card-stats"><label class="bot-capital-card" for="bot-capital-calm"><span>Capital</span><div><b>$</b><input id="bot-capital-calm" type="number" min="0" step="10" value="100" /></div></label><div class="bot-card-equity"><span>Equity</span><strong id="bot-value-calm">--</strong><em id="bot-pnl-calm">--</em></div><div class="bot-mini-metrics"><span>Cash <strong id="bot-cash-calm">--</strong></span><span>Deployed <strong id="bot-deployed-calm">--</strong></span></div></div>
+              <nav class="bot-tabs" role="tablist" aria-label="Calm detail"><button class="active" type="button" data-tab="swarm">Swarm</button><button type="button" data-tab="positions">Positions</button><button type="button" data-tab="audit">Audit</button><button type="button" data-tab="learning">Learning</button></nav>
+              <div class="bot-tab-panel active" data-panel="swarm"><div id="bot-swarm-calm" class="bot-swarm mode-scroll"></div></div><div class="bot-tab-panel" data-panel="positions"><div id="bot-positions-calm" class="bot-positions mode-scroll"></div></div><div class="bot-tab-panel" data-panel="audit"><div id="bot-log-calm" class="bot-log mode-scroll"></div></div><div class="bot-tab-panel" data-panel="learning"><div id="bot-learning-calm" class="bot-learning mode-scroll"></div></div>
+            </article>
+            <article class="bot-mode-card normal" data-bot-mode="normal">
+              <header class="bot-mode-head"><div><span class="section-kicker">Normal</span><h3>Balanced execution</h3></div><label class="bot-enable-toggle" for="bot-enabled-normal"><input id="bot-enabled-normal" type="checkbox" checked /><span>Enabled</span></label><div class="bot-mode-state"><strong id="bot-state-normal">Idle</strong><em id="bot-phase-normal" class="idle">idle</em></div></header>
+              <div class="bot-card-stats"><label class="bot-capital-card" for="bot-capital-normal"><span>Capital</span><div><b>$</b><input id="bot-capital-normal" type="number" min="0" step="10" value="100" /></div></label><div class="bot-card-equity"><span>Equity</span><strong id="bot-value-normal">--</strong><em id="bot-pnl-normal">--</em></div><div class="bot-mini-metrics"><span>Cash <strong id="bot-cash-normal">--</strong></span><span>Deployed <strong id="bot-deployed-normal">--</strong></span></div></div>
+              <nav class="bot-tabs" role="tablist" aria-label="Normal detail"><button class="active" type="button" data-tab="swarm">Swarm</button><button type="button" data-tab="positions">Positions</button><button type="button" data-tab="audit">Audit</button><button type="button" data-tab="learning">Learning</button></nav>
+              <div class="bot-tab-panel active" data-panel="swarm"><div id="bot-swarm-normal" class="bot-swarm mode-scroll"></div></div><div class="bot-tab-panel" data-panel="positions"><div id="bot-positions-normal" class="bot-positions mode-scroll"></div></div><div class="bot-tab-panel" data-panel="audit"><div id="bot-log-normal" class="bot-log mode-scroll"></div></div><div class="bot-tab-panel" data-panel="learning"><div id="bot-learning-normal" class="bot-learning mode-scroll"></div></div>
+            </article>
+            <article class="bot-mode-card aggressive" data-bot-mode="aggressive">
+              <header class="bot-mode-head"><div><span class="section-kicker">Aggressive</span><h3>Fast momentum</h3></div><label class="bot-enable-toggle" for="bot-enabled-aggressive"><input id="bot-enabled-aggressive" type="checkbox" checked /><span>Enabled</span></label><div class="bot-mode-state"><strong id="bot-state-aggressive">Idle</strong><em id="bot-phase-aggressive" class="idle">idle</em></div></header>
+              <div class="bot-card-stats"><label class="bot-capital-card" for="bot-capital-aggressive"><span>Capital</span><div><b>$</b><input id="bot-capital-aggressive" type="number" min="0" step="10" value="100" /></div></label><div class="bot-card-equity"><span>Equity</span><strong id="bot-value-aggressive">--</strong><em id="bot-pnl-aggressive">--</em></div><div class="bot-mini-metrics"><span>Cash <strong id="bot-cash-aggressive">--</strong></span><span>Deployed <strong id="bot-deployed-aggressive">--</strong></span></div></div>
+              <nav class="bot-tabs" role="tablist" aria-label="Aggressive detail"><button class="active" type="button" data-tab="swarm">Swarm</button><button type="button" data-tab="positions">Positions</button><button type="button" data-tab="audit">Audit</button><button type="button" data-tab="learning">Learning</button></nav>
+              <div class="bot-tab-panel active" data-panel="swarm"><div id="bot-swarm-aggressive" class="bot-swarm mode-scroll"></div></div><div class="bot-tab-panel" data-panel="positions"><div id="bot-positions-aggressive" class="bot-positions mode-scroll"></div></div><div class="bot-tab-panel" data-panel="audit"><div id="bot-log-aggressive" class="bot-log mode-scroll"></div></div><div class="bot-tab-panel" data-panel="learning"><div id="bot-learning-aggressive" class="bot-learning mode-scroll"></div></div>
+            </article>
+          </section>
+
+          <section id="bot-polymarket-panel" class="poly-workspace hidden" aria-label="Polymarket BTC paper workspace">
+            <header class="poly-workspace-header"><div class="poly-workspace-title"><span class="poly-workspace-mark">₿</span><div><span class="section-kicker">Polymarket paper trading</span><h3>BTC direction</h3><p>One live window. Three independent paper decisions.</p></div></div><div class="poly-workspace-actions"><label for="polymarket-interval"><span>Window</span><select id="polymarket-interval"><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></label><button id="polymarket-clear-audit" class="text-button" type="button">Clear audit</button><button id="polymarket-reset" class="text-button danger" type="button">Reset paper</button></div></header>
+            <section class="poly-account-strip"><div class="poly-allocation-panel"><div><span class="section-kicker">Paper allocation</span><strong>Independent strategy limits</strong></div><div class="poly-capital-group"><label class="calm" for="polymarket-capital-calm"><span><input id="polymarket-enabled-calm" type="checkbox" checked /><b>Calm</b></span><span>$ <input id="polymarket-capital-calm" type="number" min="1" step="1" value="100" /></span></label><label class="normal" for="polymarket-capital-normal"><span><input id="polymarket-enabled-normal" type="checkbox" checked /><b>Normal</b></span><span>$ <input id="polymarket-capital-normal" type="number" min="1" step="1" value="100" /></span></label><label class="aggressive" for="polymarket-capital-aggressive"><span><input id="polymarket-enabled-aggressive" type="checkbox" checked /><b>Aggressive</b></span><span>$ <input id="polymarket-capital-aggressive" type="number" min="1" step="1" value="100" /></span></label></div></div><div id="polymarket-summary" class="poly-account-summary"></div></section>
+            <section class="poly-market-section"><div id="polymarket-market-card" class="poly-market-card"></div><div id="polymarket-secondary-card" class="poly-secondary-card"></div></section>
+            <section class="poly-swarm-section"><header><div><span class="section-kicker">Independent swarms</span><h4>Separate capital, one live market</h4></div><span>Every decision visible</span></header><div id="polymarket-swarms" class="poly-swarm-grid"></div></section>
+            <section class="poly-activity-grid"><article><header><h4>Window trade tape</h4><span>Completed orders</span></header><div id="polymarket-trades" class="poly-trade-list"></div></article><article><header><h4>Learning by swarm</h4><span>Performance memory</span></header><div id="polymarket-learning" class="poly-learning-list"></div></article></section>
+          </section>
+        </main>
+      </section>
+
+      <div id="order-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-box"><header><div><span class="section-kicker">Paper order</span><h3 id="modal-title">Trade --</h3></div><button id="modal-close" class="icon-button" type="button" aria-label="Close">×</button></header><p id="modal-price" class="modal-price">--</p><label class="modal-field" for="order-qty"><span>Quantity</span><input id="order-qty" type="number" step="any" min="0" value="1" /></label><div class="modal-total"><span>Total value</span><strong id="order-total">$0.00</strong></div><button id="modal-confirm" class="submit-order buy" type="button">Confirm order</button></div>
       </div>
     </div>
-    
+
+    <script src="bots/LearningEngine.js"></script>
+    <script src="bots/SwarmWorker.js"></script>
     <script src="bots/BotBase.js"></script>
     <script src="bots/CalmBot.js"></script>
     <script src="bots/NormalBot.js"></script>
     <script src="bots/AggressiveBot.js"></script>
+    <script src="bots/PolymarketSwarmEngine.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

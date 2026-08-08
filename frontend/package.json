@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 8080"
+    "dev": "vite --host 0.0.0.0 --port 8080",
+    "test": "node test_bot_smart.cjs && node test_e2e_integration.cjs"
   },
   "devDependencies": {
-    "vite": "^8.1.0"
+    "vite": "^8.1.0",
+    "jsdom": "^29.1.1"
   }
 }

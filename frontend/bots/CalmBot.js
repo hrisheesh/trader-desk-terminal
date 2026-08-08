@@ -1,78 +1,63 @@
+// Calm Bot — Mean-Reversion Scalper.
+// Philosophy: protect capital, buy statistically oversold dips near support
+// with low noise, take quick scalps and trail tightly. Few, patient positions.
 class CalmBot extends window.TraderBot {
   constructor() {
-    super('calm', 1500); // Ticks every 1.5 seconds (Calm)
+    super("calm", 1500);
   }
 
   traits() {
     return {
-      label: "Calm Scalper",
+      label: "Calm Mean-Reverter",
       strategy: "mean_reversion",
-      maxPosition: 0.30,
-      drawdownFromHighPct: 1.5, // Stop-loss trailing sensitivity
+      directionalBias: "reversion",
+      preferredSetups: ["reversion", "pullback"],
+      riskPerTrade: 0.0011,
+      maxRiskLoad: 45,
+      minSamples: 10,
+      verdictMinConfidence: 30,
+      qualityWeight: 0.7,
+      agreementWeight: 1.1,
+      momentumWeight: 1.0,
+      expectReversion: true,
+      exitOnReversion: true,
+      reversionExitZ: 0.4,
+      // Reversion entry filters — dip must actually turn and be a real
+      // dislocation relative to the tape's noise (momZ/moveZ are sigmas).
+      // DEMO-MODE: relaxed reversion bars so Calm trades a quiet tape.
+      maxNoise: 2.0,
+      maxRsi: 55,
+      minTurnUp: 0.0,
+      bbZEntryMax: 0.6,
+      minZ: -0.7,
+      minReversionMomZ: -0.6,
+      minMoveZ: 1.0,
+      stopLossBase: 0.35,
+      stopLossVol: 0.5,
+      stopFloor: 0.3,
+      stopCap: 2.5,
+      takeProfitBase: 0.6,
+      takeProfitVol: 0.6,
+      tpFloor: 0.4,
+      tpCap: 3.5,
+      stopMoveMultiple: 1.1,
+      targetMoveMultiple: 1.5,
+      minEdgeBase: 46,
+      minEdgeFloor: 46,
+      minEdgeCap: 62,
+      convictionBias: 0.72,
+      maxPosition: 0.08,
+      maxExposure: 0.22,
+      maxPositions: 4,
+      cooldownMs: 45000,
+      trailingFraction: 1,
+      takeProfitFraction: 0.7,
+      takeProfitAction: "LOCK PROFIT",
+      breakevenLockPct: 0.1,
+      breakevenTrailPct: 0.07,
+      maxHoldMs: 6 * 60 * 1000,
+      entryRuntimeFraction: 0.25,
     };
-  }
-
-  evaluateEntry(context, snapshot) {
-    const profile = this.traits();
-    let action = "WAIT";
-    let confidence = 0;
-    let risk = context.riskLoad;
-    let reason = "Watching L2 depth";
-
-    if (context.pnlPct < -0.5) {
-      reason = "Prior trades showing weakness";
-      risk += 25;
-    }
-
-    if (context.l2Imbalance > 15 && context.agreement > 10 && context.volatilityPct < 2 && context.l2BidVol > context.l2AskVol * 2.0) {
-      action = "BUY";
-      confidence = context.opportunity + (context.l2Imbalance * 1.5) - risk + 15;
-      reason = `Massive L2 Bid Wall (${context.l2Imbalance.toFixed(1)}% & >2x Vol) & High Agreement`;
-    } else if (context.l2Imbalance < -10 || context.l2AskVol > context.l2BidVol * 1.5) {
-      reason = "L2 Ask Pressure or heavy sell wall, skipping";
-      risk += 15;
-    } else if (context.volatilityPct > 3) {
-      reason = "Too volatile for Calm bot";
-      risk += 20;
-    }
-
-    const notional = Math.min(snapshot.cash, window.botCapital(this.mode) * profile.maxPosition);
-    
-    return {
-      action,
-      confidence,
-      risk,
-      notional: action === "BUY" ? notional : 0,
-      reason,
-      score: context.score
-    };
-  }
-
-  evaluateExit(context, snapshot) {
-    const profile = this.traits();
-    
-    // Hard stop loss
-    if (context.pnlPct < -5.0) {
-      return { action: "EXIT", reason: `Hard Stop-Loss (-5.0%)` };
-    }
-    
-    // Dynamic Trailing Stop Loss using High-Water Mark
-    if (context.drawdownFromHighPct > profile.drawdownFromHighPct) {
-      const lockType = context.pnlPct > 0 ? "LOCK PROFIT" : "TRAILING STOP";
-      return { action: lockType, reason: `Price dropped ${context.drawdownFromHighPct.toFixed(2)}% from peak` };
-    }
-
-    // Profit Target
-    if (context.pnlPct > 3.0) {
-      return { action: "LOCK PROFIT", reason: `Profit Target Hit (+3.0%)` };
-    }
-    
-    // Mean Reversion Weakness
-    if (context.pnlPct > 0.5 && context.l2Imbalance < -5) {
-      return { action: "EXIT", reason: `L2 Resistance Detected` };
-    }
-
-    return { action: "HOLD", reason: "Holding position securely" };
   }
 }
 
